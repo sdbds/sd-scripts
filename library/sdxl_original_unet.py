@@ -1093,7 +1093,7 @@ class SdxlUNet2DConditionModel(nn.Module):
         layer_cnt = 0
 
         for module in self.output_blocks:
-            if self.use_scale_long:
+            if self.scale_long:
                 h = torch.cat([h, hs.pop() * (self.kappa)** (9 - 1 - layer_cnt)], dim=1)
             else:
                 h = torch.cat([h, hs.pop() * 2**(-0.5)], dim=1)
