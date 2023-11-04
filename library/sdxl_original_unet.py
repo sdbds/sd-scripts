@@ -304,10 +304,6 @@ class ResnetBlock2D(nn.Module):
             self.skip_connection = nn.Identity()
 
         self.gradient_checkpointing = False
-        self.use_scalelong = False
-
-    def set_use_scalelong(self, scaelong):
-        self.use_scalelong = scaelong
 
     def forward_body(self, x, emb):
         h = self.in_layers(x)
@@ -315,10 +311,7 @@ class ResnetBlock2D(nn.Module):
         h = h + emb_out[:, :, None, None]
         h = self.out_layers(h)
         x = self.skip_connection(x)
-        if self.use_scalelong:
-            return h + x * 2**(-0.5)
-        else:
-            return h + x
+        return h + x
 
     def forward(self, x, emb):
         if self.training and self.gradient_checkpointing:
@@ -820,6 +813,7 @@ class SdxlUNet2DConditionModel(nn.Module):
 
         self.gradient_checkpointing = False
         # self.sample_size = sample_size
+        self.scale_long = False
 
         # time embedding
         self.time_embed = nn.Sequential(
@@ -1054,12 +1048,12 @@ class SdxlUNet2DConditionModel(nn.Module):
                     # print(module.__class__.__name__, module.gradient_checkpointing, "->", value)
                     module.gradient_checkpointing = value
 
-    def set_use_scalelong(self, scalelong: bool) -> None:
+    def set_use_scale_long(self, scale_long: bool) -> None:
         blocks = self.output_blocks
         for block in blocks:
             for module in block:
                 if hasattr(module, "set_use_scalelong"):
-                    module.set_use_scalelong(scalelong)
+                    module.set_use_scale_long(scalelong)
 
     # endregion
 
@@ -1096,10 +1090,15 @@ class SdxlUNet2DConditionModel(nn.Module):
             hs.append(h)
 
         h = call_module(self.middle_block, h, emb, context)
+        layer_cnt = 0
 
         for module in self.output_blocks:
-            h = torch.cat([h[:, :hs[-1].shape[1]], hs.pop()], dim=1)
+            if self.use_scale_long:
+                h = torch.cat([h, hs.pop() * (self.kappa)** (9 - 1 - layer_cnt)], dim=1)
+            else:
+                h = torch.cat([h, hs.pop() * 2**(-0.5)], dim=1)
             h = call_module(module, h, emb, context)
+            layer_cnt += 1
 
         h = h.type(x.dtype)
         h = call_module(self.out, h, emb, context)
