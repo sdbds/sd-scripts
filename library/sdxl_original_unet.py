@@ -304,6 +304,10 @@ class ResnetBlock2D(nn.Module):
             self.skip_connection = nn.Identity()
 
         self.gradient_checkpointing = False
+        self.use_scalelong = False
+
+    def set_use_scalelong(self, scaelong):
+        self.use_scalelong = scaelong
 
     def forward_body(self, x, emb):
         h = self.in_layers(x)
@@ -311,7 +315,10 @@ class ResnetBlock2D(nn.Module):
         h = h + emb_out[:, :, None, None]
         h = self.out_layers(h)
         x = self.skip_connection(x)
-        return x + h
+        if self.use_scalelong:
+            return h + x * 2**(-0.5)
+        else:
+            return h + x
 
     def forward(self, x, emb):
         if self.training and self.gradient_checkpointing:
@@ -1047,6 +1054,13 @@ class SdxlUNet2DConditionModel(nn.Module):
                     # print(module.__class__.__name__, module.gradient_checkpointing, "->", value)
                     module.gradient_checkpointing = value
 
+    def set_use_scalelong(self, scalelong: bool) -> None:
+        blocks = self.output_blocks
+        for block in blocks:
+            for module in block:
+                if hasattr(module, "set_use_scalelong"):
+                    module.set_use_scalelong(scalelong)
+
     # endregion
 
     def forward(self, x, timesteps=None, context=None, y=None, **kwargs):
@@ -1084,7 +1098,7 @@ class SdxlUNet2DConditionModel(nn.Module):
         h = call_module(self.middle_block, h, emb, context)
 
         for module in self.output_blocks:
-            h = torch.cat([h, hs.pop()], dim=1)
+            h = torch.cat([h[:, :hs[-1].shape[1]], hs.pop()], dim=1)
             h = call_module(module, h, emb, context)
 
         h = h.type(x.dtype)
