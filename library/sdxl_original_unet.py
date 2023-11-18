@@ -814,6 +814,7 @@ class SdxlUNet2DConditionModel(nn.Module):
         self.gradient_checkpointing = False
         # self.sample_size = sample_size
         self.scale_long = False
+        self.kappa = 0.5
 
         # time embedding
         self.time_embed = nn.Sequential(
@@ -1052,8 +1053,8 @@ class SdxlUNet2DConditionModel(nn.Module):
         blocks = self.output_blocks
         for block in blocks:
             for module in block:
-                if hasattr(module, "set_use_scalelong"):
-                    module.set_use_scale_long(scalelong)
+                if hasattr(module, "scale_long"):
+                    module.scale_long(scale_long)
 
     # endregion
 
@@ -1093,10 +1094,12 @@ class SdxlUNet2DConditionModel(nn.Module):
         layer_cnt = 0
 
         for module in self.output_blocks:
-            if self.scale_long:
+            if self.kappa:
                 h = torch.cat([h, hs.pop() * (self.kappa)** (9 - 1 - layer_cnt)], dim=1)
-            else:
+            elif self.scale_long:
                 h = torch.cat([h, hs.pop() * 2**(-0.5)], dim=1)
+            else:
+                h = torch.cat([h, hs.pop()], dim=1)
             h = call_module(module, h, emb, context)
             layer_cnt += 1
 
