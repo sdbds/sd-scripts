@@ -14,15 +14,10 @@ from tqdm import tqdm
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-try:
-    import intel_extension_for_pytorch as ipex
+from library.ipex_interop import init_ipex
 
-    if torch.xpu.is_available():
-        from library.ipex import ipex_init
+init_ipex()
 
-        ipex_init()
-except Exception:
-    pass
 from accelerate.utils import set_seed
 from diffusers import DDPMScheduler
 from library import model_util
@@ -847,10 +842,11 @@ class NetworkTrainer:
                     loss = loss.mean()  # 平均なのでbatch_sizeで割る必要なし
 
                     accelerator.backward(loss)
-                    self.all_reduce_network(accelerator, network)  # sync DDP grad manually
-                    if accelerator.sync_gradients and args.max_grad_norm != 0.0:
-                        params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
-                        accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                    if accelerator.sync_gradients:
+                        self.all_reduce_network(accelerator, network)  # sync DDP grad manually
+                        if args.max_grad_norm != 0.0:
+                            params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
+                            accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
                     optimizer.step()
                     lr_scheduler.step()
