@@ -1,9 +1,11 @@
+__SDXL is now supported. The sdxl branch has been merged into the main branch. If you update the repository, please follow the upgrade instructions. Also, the version of accelerate has been updated, so please run accelerate config again.__ The documentation for SDXL training is [here](./README.md#sdxl-training).
+
 This repository contains training, generation and utility scripts for Stable Diffusion.
 
-[__Change History__](#change-history) is moved to the bottom of the page.
+[__Change History__](#change-history) is moved to the bottom of the page. 
 更新履歴は[ページ末尾](#change-history)に移しました。
 
-[日本語版README](./README-ja.md)
+[日本語版READMEはこちら](./README-ja.md)
 
 For easier use (GUI and PowerShell scripts etc...), please visit [the repository maintained by bmaltais](https://github.com/bmaltais/kohya_ss). Thanks to @bmaltais!
 
@@ -16,15 +18,13 @@ This repository contains the scripts for:
 * Image generation
 * Model conversion (supports 1.x and 2.x, Stable Diffision ckpt/safetensors and Diffusers)
 
-__Stable Diffusion web UI now seems to support LoRA trained by ``sd-scripts``.__ Thank you for great work!!! 
-
 ## About requirements.txt
 
 These files do not contain requirements for PyTorch. Because the versions of them depend on your environment. Please install PyTorch at first (see installation guide below.) 
 
-The scripts are tested with PyTorch 1.12.1 and 1.13.0, Diffusers 0.10.2.
+The scripts are tested with Pytorch 2.0.1. 1.12.1 is not tested but should work.
 
-## Links to how-to-use documents
+## Links to usage documentation
 
 Most of the documents are written in Japanese.
 
@@ -64,19 +64,20 @@ cd sd-scripts
 python -m venv venv
 .\venv\Scripts\activate
 
-pip install torch==1.12.1+cu116 torchvision==0.13.1+cu116 --extra-index-url https://download.pytorch.org/whl/cu116
+pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 --index-url https://download.pytorch.org/whl/cu118
 pip install --upgrade -r requirements.txt
-pip install -U -I --no-deps https://github.com/C43H66N12O12S2/stable-diffusion-webui/releases/download/f/xformers-0.0.14.dev0-cp310-cp310-win_amd64.whl
-
-cp .\bitsandbytes_windows\*.dll .\venv\Lib\site-packages\bitsandbytes\
-cp .\bitsandbytes_windows\cextension.py .\venv\Lib\site-packages\bitsandbytes\cextension.py
-cp .\bitsandbytes_windows\main.py .\venv\Lib\site-packages\bitsandbytes\cuda_setup\main.py
+pip install xformers==0.0.20
 
 accelerate config
 ```
 
-update: ``python -m venv venv`` is seemed to be safer than ``python -m venv --system-site-packages venv`` (some user have packages in global python).
+__Note:__ Now bitsandbytes is optional. Please install any version of bitsandbytes as needed. Installation instructions are in the following section.
 
+<!-- 
+cp .\bitsandbytes_windows\*.dll .\venv\Lib\site-packages\bitsandbytes\
+cp .\bitsandbytes_windows\cextension.py .\venv\Lib\site-packages\bitsandbytes\cextension.py
+cp .\bitsandbytes_windows\main.py .\venv\Lib\site-packages\bitsandbytes\cuda_setup\main.py
+-->
 Answers to accelerate config:
 
 ```txt
@@ -94,30 +95,42 @@ note: Some user reports ``ValueError: fp16 mixed precision requires a GPU`` is o
 
 (Single GPU with id `0` will be used.)
 
-### about PyTorch and xformers
+### Optional: Use `bitsandbytes` (8bit optimizer)
 
-Other versions of PyTorch and xformers seem to have problems with training.
-If there is no other reason, please install the specified version.
+For 8bit optimizer, you need to install `bitsandbytes`. For Linux, please install `bitsandbytes` as usual (0.41.1 or later is recommended.)
 
-### Optional: Use Lion8bit
+For Windows, there are several versions of `bitsandbytes`:
 
-For Lion8bit, you need to upgrade `bitsandbytes` to 0.38.0 or later. Uninstall `bitsandbytes`, and for Windows, install the Windows version whl file from [here](https://github.com/jllllll/bitsandbytes-windows-webui) or other sources, like:
+- `bitsandbytes` 0.35.0: Stable version. AdamW8bit is available. `full_bf16` is not available.
+- `bitsandbytes` 0.41.1: Lion8bit, PagedAdamW8bit and PagedLion8bit are available. `full_bf16` is available.
 
-```powershell
-pip install https://github.com/jllllll/bitsandbytes-windows-webui/raw/main/bitsandbytes-0.38.1-py3-none-any.whl
-```
+Note: `bitsandbytes`above 0.35.0 till 0.41.0 seems to have an issue: https://github.com/TimDettmers/bitsandbytes/issues/659
 
-For upgrading, upgrade this repo with `pip install .`, and upgrade necessary packages manually.
+Follow the instructions below to install `bitsandbytes` for Windows.
 
-### Optional: Use PagedAdamW8bit and PagedLion8bit
+### bitsandbytes 0.35.0 for Windows
 
-For PagedAdamW8bit and PagedLion8bit, you need to upgrade `bitsandbytes` to 0.39.0 or later. Uninstall `bitsandbytes`, and for Windows, install the Windows version whl file from [here](https://github.com/jllllll/bitsandbytes-windows-webui) or other sources, like:
+Open a regular Powershell terminal and type the following inside:
 
 ```powershell
-pip install https://github.com/jllllll/bitsandbytes-windows-webui/releases/download/wheels/bitsandbytes-0.39.1-py3-none-win_amd64.whl
+cd sd-scripts
+.\venv\Scripts\activate
+pip install bitsandbytes==0.35.0
+
+cp .\bitsandbytes_windows\*.dll .\venv\Lib\site-packages\bitsandbytes\
+cp .\bitsandbytes_windows\cextension.py .\venv\Lib\site-packages\bitsandbytes\cextension.py
+cp .\bitsandbytes_windows\main.py .\venv\Lib\site-packages\bitsandbytes\cuda_setup\main.py
 ```
 
-For upgrading, upgrade this repo with `pip install .`, and upgrade necessary packages manually.
+This will install `bitsandbytes` 0.35.0 and copy the necessary files to the `bitsandbytes` directory.
+
+### bitsandbytes 0.41.1 for Windows
+
+Install the Windows version whl file from [here](https://github.com/jllllll/bitsandbytes-windows-webui) or other sources, like:
+
+```powershell
+python -m pip install bitsandbytes==0.41.1 --prefer-binary --extra-index-url=https://jllllll.github.io/bitsandbytes-windows-webui
+```
 
 ## Upgrade
 
@@ -148,214 +161,202 @@ The majority of scripts is licensed under ASL 2.0 (including codes from Diffuser
 
 [BLIP](https://github.com/salesforce/BLIP): BSD-3-Clause
 
+
+## SDXL training
+
+The documentation in this section will be moved to a separate document later.
+
+### Training scripts for SDXL
+
+- `sdxl_train.py` is a script for SDXL fine-tuning. The usage is almost the same as `fine_tune.py`, but it also supports DreamBooth dataset.
+  - `--full_bf16` option is added. Thanks to KohakuBlueleaf!
+    - This option enables the full bfloat16 training (includes gradients). This option is useful to reduce the GPU memory usage. 
+    - The full bfloat16 training might be unstable. Please use it at your own risk.
+  - The different learning rates for each U-Net block are now supported in sdxl_train.py. Specify with `--block_lr` option. Specify 23 values separated by commas like `--block_lr 1e-3,1e-3 ... 1e-3`.
+    - 23 values correspond to `0: time/label embed, 1-9: input blocks 0-8, 10-12: mid blocks 0-2, 13-21: output blocks 0-8, 22: out`.
+- `prepare_buckets_latents.py` now supports SDXL fine-tuning.
+
+- `sdxl_train_network.py` is a script for LoRA training for SDXL. The usage is almost the same as `train_network.py`.
+
+- Both scripts has following additional options:
+  - `--cache_text_encoder_outputs` and `--cache_text_encoder_outputs_to_disk`: Cache the outputs of the text encoders. This option is useful to reduce the GPU memory usage. This option cannot be used with options for shuffling or dropping the captions.
+  - `--no_half_vae`: Disable the half-precision (mixed-precision) VAE. VAE for SDXL seems to produce NaNs in some cases. This option is useful to avoid the NaNs.
+
+- `--weighted_captions` option is not supported yet for both scripts.
+
+- `sdxl_train_textual_inversion.py` is a script for Textual Inversion training for SDXL. The usage is almost the same as `train_textual_inversion.py`.
+  - `--cache_text_encoder_outputs` is not supported.
+  - There are two options for captions:
+    1. Training with captions. All captions must include the token string. The token string is replaced with multiple tokens.
+    2. Use `--use_object_template` or `--use_style_template` option. The captions are generated from the template. The existing captions are ignored.
+  - See below for the format of the embeddings.
+
+- `--min_timestep` and `--max_timestep` options are added to each training script. These options can be used to train U-Net with different timesteps. The default values are 0 and 1000.
+
+### Utility scripts for SDXL
+
+- `tools/cache_latents.py` is added. This script can be used to cache the latents to disk in advance. 
+  - The options are almost the same as `sdxl_train.py'. See the help message for the usage.
+  - Please launch the script as follows:
+    `accelerate launch  --num_cpu_threads_per_process 1 tools/cache_latents.py ...`
+  - This script should work with multi-GPU, but it is not tested in my environment.
+
+- `tools/cache_text_encoder_outputs.py` is added. This script can be used to cache the text encoder outputs to disk in advance. 
+  - The options are almost the same as `cache_latents.py` and `sdxl_train.py`. See the help message for the usage.
+
+- `sdxl_gen_img.py` is added. This script can be used to generate images with SDXL, including LoRA, Textual Inversion and ControlNet-LLLite. See the help message for the usage.
+
+### Tips for SDXL training
+
+- The default resolution of SDXL is 1024x1024.
+- The fine-tuning can be done with 24GB GPU memory with the batch size of 1. For 24GB GPU, the following options are recommended __for the fine-tuning with 24GB GPU memory__:
+  - Train U-Net only.
+  - Use gradient checkpointing.
+  - Use `--cache_text_encoder_outputs` option and caching latents.
+  - Use Adafactor optimizer. RMSprop 8bit or Adagrad 8bit may work. AdamW 8bit doesn't seem to work.
+- The LoRA training can be done with 8GB GPU memory (10GB recommended). For reducing the GPU memory usage, the following options are recommended:
+  - Train U-Net only.
+  - Use gradient checkpointing.
+  - Use `--cache_text_encoder_outputs` option and caching latents.
+  - Use one of 8bit optimizers or Adafactor optimizer.
+  - Use lower dim (4 to 8 for 8GB GPU).
+- `--network_train_unet_only` option is highly recommended for SDXL LoRA. Because SDXL has two text encoders, the result of the training will be unexpected.
+- PyTorch 2 seems to use slightly less GPU memory than PyTorch 1.
+- `--bucket_reso_steps` can be set to 32 instead of the default value 64. Smaller values than 32 will not work for SDXL training.
+
+Example of the optimizer settings for Adafactor with the fixed learning rate:
+```toml
+optimizer_type = "adafactor"
+optimizer_args = [ "scale_parameter=False", "relative_step=False", "warmup_init=False" ]
+lr_scheduler = "constant_with_warmup"
+lr_warmup_steps = 100
+learning_rate = 4e-7 # SDXL original learning rate
+```
+
+### Format of Textual Inversion embeddings for SDXL
+
+```python
+from safetensors.torch import save_file
+
+state_dict = {"clip_g": embs_for_text_encoder_1280, "clip_l": embs_for_text_encoder_768}
+save_file(state_dict, file)
+```
+
+### ControlNet-LLLite
+
+ControlNet-LLLite, a novel method for ControlNet with SDXL, is added. See [documentation](./docs/train_lllite_README.md) for details.
+
+
 ## Change History
 
-### 15 Jun. 2023, 2023/06/15
+### Jan 27, 2024 / 2024/1/27: v0.8.3
 
-- Prodigy optimizer is supported in each training script. It is a member of D-Adaptation and is effective for DyLoRA training. [PR #585](https://github.com/kohya-ss/sd-scripts/pull/585) Please see the PR for details. Thanks to sdbds!
-  - Install the package with `pip install prodigyopt`. Then specify the option like `--optimizer_type="prodigy"`.
-- Arbitrary Dataset is supported in each training script (except XTI). You can use it by defining a Dataset class that returns images and captions.
-  - Prepare a Python script and define a class that inherits `train_util.MinimalDataset`. Then specify the option like `--dataset_class package.module.DatasetClass` in each training script.
-  - Please refer to `MinimalDataset` for implementation. I will prepare a sample later.
-- The following features have been added to the generation script.
-  - Added an option `--highres_fix_disable_control_net` to disable ControlNet in the 2nd stage of Highres. Fix. Please try it if the image is disturbed by some ControlNet such as Canny.
-  - Added Variants similar to sd-dynamic-propmpts in the prompt.
-    - If you specify `{spring|summer|autumn|winter}`, one of them will be randomly selected.
-    - If you specify `{2$$chocolate|vanilla|strawberry}`, two of them will be randomly selected.
-    - If you specify `{1-2$$ and $$chocolate|vanilla|strawberry}`, one or two of them will be randomly selected and connected by ` and `.
-    - You can specify the number of candidates in the range `0-2`. You cannot omit one side like `-2` or `1-`.
-    - It can also be specified for the prompt option.
-    - If you specify `e` or `E`, all candidates will be selected and the prompt will be repeated multiple times (`--images_per_prompt` is ignored). It may be useful for creating X/Y plots.
-    - You can also specify `--am {e$$0.2|0.4|0.6|0.8|1.0},{e$$0.4|0.7|1.0} --d 1234`. In this case, 15 prompts will be generated with 5*3.
-    - There is no weighting function.
+- Fixed a bug that the training crashes when `--fp8_base` is specified with `--save_state`. PR [#1079](https://github.com/kohya-ss/sd-scripts/pull/1079) Thanks to feffy380!
+  - `safetensors` is updated. Please see [Upgrade](#upgrade) and update the library.
+- Fixed a bug that the training crashes when `network_multiplier` is specified with multi-GPU training. PR [#1084](https://github.com/kohya-ss/sd-scripts/pull/1084) Thanks to fireicewolf!
+- Fixed a bug that the training crashes when training ControlNet-LLLite.
 
-- 各学習スクリプトでProdigyオプティマイザがサポートされました。D-Adaptationの仲間でDyLoRAの学習に有効とのことです。 [PR #585](https://github.com/kohya-ss/sd-scripts/pull/585)  詳細はPRをご覧ください。sdbds氏に感謝します。
-  - `pip install prodigyopt` としてパッケージをインストールしてください。また `--optimizer_type="prodigy"` のようにオプションを指定します。
-- 各学習スクリプトで任意のDatasetをサポートしました（XTIを除く）。画像とキャプションを返すDatasetクラスを定義することで、学習スクリプトから利用できます。
-  - Pythonスクリプトを用意し、`train_util.MinimalDataset`を継承するクラスを定義してください。そして各学習スクリプトのオプションで `--dataset_class package.module.DatasetClass` のように指定してください。
-  - 実装方法は `MinimalDataset` を参考にしてください。のちほどサンプルを用意します。
-- 生成スクリプトに以下の機能追加を行いました。
-  - Highres. Fixの2nd stageでControlNetを無効化するオプション `--highres_fix_disable_control_net` を追加しました。Canny等一部のControlNetで画像が乱れる場合にお試しください。
-  - プロンプトでsd-dynamic-propmptsに似たVariantをサポートしました。
-    - `{spring|summer|autumn|winter}` のように指定すると、いずれかがランダムに選択されます。
-    - `{2$$chocolate|vanilla|strawberry}` のように指定すると、いずれか2個がランダムに選択されます。
-    - `{1-2$$ and $$chocolate|vanilla|strawberry}` のように指定すると、1個か2個がランダムに選択され ` and ` で接続されます。
-    - 個数のレンジ指定では`0-2`のように0個も指定可能です。`-2`や`1-`のような片側の省略はできません。
-    - プロンプトオプションに対しても指定可能です。
-    - `{e$$chocolate|vanilla|strawberry}` のように`e`または`E`を指定すると、すべての候補が選択されプロンプトが複数回繰り返されます（`--images_per_prompt`は無視されます）。X/Y plotの作成に便利かもしれません。
-    - `--am {e$$0.2|0.4|0.6|0.8|1.0},{e$$0.4|0.7|1.0} --d 1234`のような指定も可能です。この場合、5*3で15回のプロンプトが生成されます。
-    - Weightingの機能はありません。
+- `--fp8_base` 指定時に `--save_state` での保存がエラーになる不具合が修正されました。 PR [#1079](https://github.com/kohya-ss/sd-scripts/pull/1079) feffy380 氏に感謝します。
+  - `safetensors` がバージョンアップされていますので、[Upgrade](#upgrade) を参照し更新をお願いします。
+- 複数 GPU での学習時に `network_multiplier` を指定するとクラッシュする不具合が修正されました。 PR [#1084](https://github.com/kohya-ss/sd-scripts/pull/1084) fireicewolf 氏に感謝します。
+- ControlNet-LLLite の学習がエラーになる不具合を修正しました。 
 
-### 8 Jun. 2023, 2023/06/08
+### Jan 23, 2024 / 2024/1/23: v0.8.2
 
-- Fixed a bug where clip skip did not work when training with weighted captions (`--weighted_captions` specified) and when generating sample images during training.
-- 重みづけキャプションでの学習時（`--weighted_captions`指定時）および学習中のサンプル画像生成時にclip skipが機能しない不具合を修正しました。
+- [Experimental] The `--fp8_base` option is added to the training scripts for LoRA etc. The base model (U-Net, and Text Encoder when training modules for Text Encoder) can be trained with fp8. PR [#1057](https://github.com/kohya-ss/sd-scripts/pull/1057) Thanks to KohakuBlueleaf!
+  - Please specify `--fp8_base` in `train_network.py` or `sdxl_train_network.py`.
+  - PyTorch 2.1 or later is required.
+  - If you use xformers with PyTorch 2.1, please see [xformers repository](https://github.com/facebookresearch/xformers) and install the appropriate version according to your CUDA version.
+  - The sample image generation during training consumes a lot of memory. It is recommended to turn it off.
 
-### 6 Jun. 2023, 2023/06/06
+- [Experimental] The network multiplier can be specified for each dataset in the training scripts for LoRA etc.
+  - This is an experimental option and may be removed or changed in the future.
+  - For example, if you train with state A as `1.0` and state B as `-1.0`, you may be able to generate by switching between state A and B depending on the LoRA application rate.
+  - Also, if you prepare five states and train them as `0.2`, `0.4`, `0.6`, `0.8`, and `1.0`, you may be able to generate by switching the states smoothly depending on the application rate.
+  - Please specify `network_multiplier` in `[[datasets]]` in `.toml` file.
+- Some options are added to `networks/extract_lora_from_models.py` to reduce the memory usage.
+  - `--load_precision` option can be used to specify the precision when loading the model. If the model is saved in fp16, you can reduce the memory usage by specifying `--load_precision fp16` without losing precision.
+  - `--load_original_model_to` option can be used to specify the device to load the original model. `--load_tuned_model_to` option can be used to specify the device to load the derived model. The default is `cpu` for both options, but you can specify `cuda` etc. You can reduce the memory usage by loading one of them to GPU. This option is available only for SDXL.
 
-- Fix `train_network.py` to probably work with older versions of LyCORIS.
-- `gen_img_diffusers.py` now supports `BREAK` syntax.
-- `train_network.py`がLyCORISの以前のバージョンでも恐らく動作するよう修正しました。
-- `gen_img_diffusers.py` で `BREAK` 構文をサポートしました。
+- The gradient synchronization in LoRA training with multi-GPU is improved. PR [#1064](https://github.com/kohya-ss/sd-scripts/pull/1064) Thanks to KohakuBlueleaf!
+- The code for Intel IPEX support is improved. PR [#1060](https://github.com/kohya-ss/sd-scripts/pull/1060) Thanks to akx!
+- Fixed a bug in multi-GPU Textual Inversion training.
 
-### 3 Jun. 2023, 2023/06/03
+- （実験的）　LoRA等の学習スクリプトで、ベースモデル（U-Net、および Text Encoder のモジュール学習時は Text Encoder も）の重みを fp8 にして学習するオプションが追加されました。 PR [#1057](https://github.com/kohya-ss/sd-scripts/pull/1057) KohakuBlueleaf 氏に感謝します。
+  - `train_network.py` または `sdxl_train_network.py` で `--fp8_base` を指定してください。
+  - PyTorch 2.1 以降が必要です。
+  - PyTorch 2.1 で xformers を使用する場合は、[xformers のリポジトリ](https://github.com/facebookresearch/xformers) を参照し、CUDA バージョンに応じて適切なバージョンをインストールしてください。
+  - 学習中のサンプル画像生成はメモリを大量に消費するため、オフにすることをお勧めします。
+- (実験的)　LoRA 等の学習で、データセットごとに異なるネットワーク適用率を指定できるようになりました。 
+  - 実験的オプションのため、将来的に削除または仕様変更される可能性があります。
+  - たとえば状態 A を `1.0`、状態 B を `-1.0` として学習すると、LoRA の適用率に応じて状態 A と B を切り替えつつ生成できるかもしれません。
+  - また、五段階の状態を用意し、それぞれ `0.2`、`0.4`、`0.6`、`0.8`、`1.0` として学習すると、適用率でなめらかに状態を切り替えて生成できるかもしれません。 
+  - `.toml` ファイルで `[[datasets]]` に `network_multiplier` を指定してください。
+- `networks/extract_lora_from_models.py` に使用メモリ量を削減するいくつかのオプションを追加しました。 
+  - `--load_precision` で読み込み時の精度を指定できます。モデルが fp16 で保存されている場合は `--load_precision fp16` を指定して精度を変えずにメモリ量を削減できます。
+  - `--load_original_model_to` で元モデルを読み込むデバイスを、`--load_tuned_model_to` で派生モデルを読み込むデバイスを指定できます。デフォルトは両方とも `cpu` ですがそれぞれ `cuda` 等を指定できます。片方を GPU に読み込むことでメモリ量を削減できます。SDXL の場合のみ有効です。
+- マルチ GPU での LoRA 等の学習時に勾配の同期が改善されました。 PR [#1064](https://github.com/kohya-ss/sd-scripts/pull/1064) KohakuBlueleaf 氏に感謝します。
+- Intel IPEX サポートのコードが改善されました。PR [#1060](https://github.com/kohya-ss/sd-scripts/pull/1060) akx 氏に感謝します。
+- マルチ GPU での Textual Inversion 学習の不具合を修正しました。
 
-- Max Norm Regularization is now available in `train_network.py`. [PR #545](https://github.com/kohya-ss/sd-scripts/pull/545) Thanks to AI-Casanova!
-  - Max Norm Regularization is a technique to stabilize network training by limiting the norm of network weights. It may be effective in suppressing overfitting of LoRA and improving stability when used with other LoRAs. See PR for details.
-  - Specify as `--scale_weight_norms=1.0`. It seems good to try from `1.0`.
-  - The networks other than LoRA in this repository (such as LyCORIS) do not support this option.
+- `.toml` example for network multiplier / ネットワーク適用率の `.toml` の記述例
 
-- Three types of dropout have been added to `train_network.py` and LoRA network.
-  - Dropout is a technique to suppress overfitting and improve network performance by randomly setting some of the network outputs to 0.
-  - `--network_dropout` is a normal dropout at the neuron level. In the case of LoRA, it is applied to the output of down. Proposed in [PR #545](https://github.com/kohya-ss/sd-scripts/pull/545) Thanks to AI-Casanova!
-    - `--network_dropout=0.1` specifies the dropout probability to `0.1`.
-    - Note that the specification method is different from LyCORIS.
-  - For LoRA network, `--network_args` can specify `rank_dropout` to dropout each rank with specified probability. Also `module_dropout` can be specified to dropout each module with specified probability.
-    - Specify as `--network_args "rank_dropout=0.2" "module_dropout=0.1"`.
-  - `--network_dropout`, `rank_dropout`, and `module_dropout` can be specified at the same time.
-  - Values of 0.1 to 0.3 may be good to try. Values greater than 0.5 should not be specified.
-  - `rank_dropout` and `module_dropout` are original techniques of this repository. Their effectiveness has not been verified yet.
-  - The networks other than LoRA in this repository (such as LyCORIS) do not support these options.
+```toml
+[general]
+[[datasets]]
+resolution = 512
+batch_size = 8
+network_multiplier = 1.0
 
-- Added an option `--scale_v_pred_loss_like_noise_pred` to scale v-prediction loss like noise prediction in each training script.
-  - By scaling the loss according to the time step, the weights of global noise prediction and local noise prediction become the same, and the improvement of details may be expected.
-  - See [this article](https://xrg.hatenablog.com/entry/2023/06/02/202418) by xrg for details (written in Japanese). Thanks to xrg for the great suggestion!
+... subset settings ...
 
-- Max Norm Regularizationが`train_network.py`で使えるようになりました。[PR #545](https://github.com/kohya-ss/sd-scripts/pull/545) AI-Casanova氏に感謝します。
-  - Max Norm Regularizationは、ネットワークの重みのノルムを制限することで、ネットワークの学習を安定させる手法です。LoRAの過学習の抑制、他のLoRAと併用した時の安定性の向上が期待できるかもしれません。詳細はPRを参照してください。
-  - `--scale_weight_norms=1.0`のように `--scale_weight_norms` で指定してください。`1.0`から試すと良いようです。
-  - LyCORIS等、当リポジトリ以外のネットワークは現時点では未対応です。
+[[datasets]]
+resolution = 512
+batch_size = 8
+network_multiplier = -1.0
 
-- `train_network.py` およびLoRAに計三種類のdropoutを追加しました。
-  - dropoutはネットワークの一部の出力をランダムに0にすることで、過学習の抑制、ネットワークの性能向上等を図る手法です。
-  - `--network_dropout` はニューロン単位の通常のdropoutです。LoRAの場合、downの出力に対して適用されます。[PR #545](https://github.com/kohya-ss/sd-scripts/pull/545) で提案されました。AI-Casanova氏に感謝します。
-    - `--network_dropout=0.1` などとすることで、dropoutの確率を指定できます。
-    - LyCORISとは指定方法が異なりますのでご注意ください。
-  - LoRAの場合、`--network_args`に`rank_dropout`を指定することで各rankを指定確率でdropoutします。また同じくLoRAの場合、`--network_args`に`module_dropout`を指定することで各モジュールを指定確率でdropoutします。
-    - `--network_args "rank_dropout=0.2" "module_dropout=0.1"` のように指定します。
-  - `--network_dropout`、`rank_dropout` 、 `module_dropout` は同時に指定できます。
-  - それぞれの値は0.1~0.3程度から試してみると良いかもしれません。0.5を超える値は指定しない方が良いでしょう。
-  - `rank_dropout`および`module_dropout`は当リポジトリ独自の手法です。有効性の検証はまだ行っていません。
-  - これらのdropoutはLyCORIS等、当リポジトリ以外のネットワークは現時点では未対応です。
+... subset settings ...
+```
 
-- 各学習スクリプトにv-prediction lossをnoise predictionと同様の値にスケールするオプション`--scale_v_pred_loss_like_noise_pred`を追加しました。
-  - タイムステップに応じてlossをスケールすることで、 大域的なノイズの予測と局所的なノイズの予測の重みが同じになり、ディテールの改善が期待できるかもしれません。
-  - 詳細はxrg氏のこちらの記事をご参照ください：[noise_predictionモデルとv_predictionモデルの損失 - 勾配降下党青年局](https://xrg.hatenablog.com/entry/2023/06/02/202418) xrg氏の素晴らしい記事に感謝します。
 
-### 31 May 2023, 2023/05/31
+### Jan 17, 2024 / 2024/1/17: v0.8.1
 
-- Show warning when image caption file does not exist during training. [PR #533](https://github.com/kohya-ss/sd-scripts/pull/533) Thanks to TingTingin!
-  - Warning is also displayed when using class+identifier dataset. Please ignore if it is intended.
-- `train_network.py` now supports merging network weights before training. [PR #542](https://github.com/kohya-ss/sd-scripts/pull/542) Thanks to u-haru!
-  - `--base_weights` option specifies LoRA or other model files (multiple files are allowed) to merge.
-  - `--base_weights_multiplier` option specifies multiplier of the weights to merge (multiple values are allowed). If omitted or less than `base_weights`, 1.0 is used.
-  - This is useful for incremental learning. See PR for details.
-- Show warning and continue training when uploading to HuggingFace fails.
+- Fixed a bug that the VRAM usage without Text Encoder training is larger than before in training scripts for LoRA etc (`train_network.py`, `sdxl_train_network.py`).
+  - Text Encoders were not moved to CPU.
+- Fixed typos. Thanks to akx! [PR #1053](https://github.com/kohya-ss/sd-scripts/pull/1053)
 
-- 学習時に画像のキャプションファイルが存在しない場合、警告が表示されるようになりました。 [PR #533](https://github.com/kohya-ss/sd-scripts/pull/533) TingTingin氏に感謝します。
-  - class+identifier方式のデータセットを利用している場合も警告が表示されます。意図している通りの場合は無視してください。
-- `train_network.py` に学習前にモデルにnetworkの重みをマージする機能が追加されました。 [PR #542](https://github.com/kohya-ss/sd-scripts/pull/542) u-haru氏に感謝します。
-  - `--base_weights` オプションでLoRA等のモデルファイル（複数可）を指定すると、それらの重みをマージします。
-  - `--base_weights_multiplier` オプションでマージする重みの倍率（複数可）を指定できます。省略時または`base_weights`よりも数が少ない場合は1.0になります。
-  - 差分追加学習などにご利用ください。詳細はPRをご覧ください。
-- HuggingFaceへのアップロードに失敗した場合、警告を表示しそのまま学習を続行するよう変更しました。
+- LoRA 等の学習スクリプト（`train_network.py`、`sdxl_train_network.py`）で、Text Encoder を学習しない場合の VRAM 使用量が以前に比べて大きくなっていた不具合を修正しました。 
+  - Text Encoder が GPU に保持されたままになっていました。
+- 誤字が修正されました。 [PR #1053](https://github.com/kohya-ss/sd-scripts/pull/1053) akx 氏に感謝します。
 
-### 25 May 2023, 2023/05/25
+### Jan 15, 2024 / 2024/1/15: v0.8.0
 
-- [D-Adaptation v3.0](https://github.com/facebookresearch/dadaptation) is now supported. [PR #530](https://github.com/kohya-ss/sd-scripts/pull/530) Thanks to sdbds!
-  - `--optimizer_type` now accepts `DAdaptAdamPreprint`, `DAdaptAdanIP`, and `DAdaptLion`.
-  - `DAdaptAdam` is now new. The old `DAdaptAdam` is available with `DAdaptAdamPreprint`.
-  - Simply specifying `DAdaptation` will use `DAdaptAdamPreprint` (same behavior as before).
-  - You need to install D-Adaptation v3.0. After activating venv, please do `pip install -U dadaptation`.
-  - See PR and D-Adaptation documentation for details.
-- [D-Adaptation v3.0](https://github.com/facebookresearch/dadaptation)がサポートされました。 [PR #530](https://github.com/kohya-ss/sd-scripts/pull/530)  sdbds氏に感謝します。
-  - `--optimizer_type`に`DAdaptAdamPreprint`、`DAdaptAdanIP`、`DAdaptLion` が追加されました。
-  - `DAdaptAdam`が新しくなりました。今までの`DAdaptAdam`は`DAdaptAdamPreprint`で使用できます。
-  - 単に `DAdaptation` を指定すると`DAdaptAdamPreprint`が使用されます（今までと同じ動き）。
-  - D-Adaptation v3.0のインストールが必要です。venvを有効にした後 `pip install -U dadaptation` としてください。
-  - 詳細はPRおよびD-Adaptationのドキュメントを参照してください。
+- Diffusers, Accelerate, Transformers and other related libraries have been updated. Please update the libraries with [Upgrade](#upgrade).
+  - Some model files (Text Encoder without position_id) based on the latest Transformers can be loaded.
+- `torch.compile` is supported (experimental). PR [#1024](https://github.com/kohya-ss/sd-scripts/pull/1024) Thanks to p1atdev!
+  - This feature works only on Linux or WSL.
+  - Please specify `--torch_compile` option in each training script.
+  - You can select the backend with `--dynamo_backend` option. The default is `"inductor"`. `inductor` or `eager` seems to work.
+  - Please use `--sdpa` option instead of `--xformers` option.
+  - PyTorch 2.1 or later is recommended.
+  - Please see [PR](https://github.com/kohya-ss/sd-scripts/pull/1024) for details.
+- The session name for wandb can be specified with `--wandb_run_name` option. PR [#1032](https://github.com/kohya-ss/sd-scripts/pull/1032) Thanks to hopl1t!
+- IPEX library is updated. PR [#1030](https://github.com/kohya-ss/sd-scripts/pull/1030) Thanks to Disty0!
+- Fixed a bug that Diffusers format model cannot be saved.
 
-### 22 May 2023, 2023/05/22
+- Diffusers、Accelerate、Transformers 等の関連ライブラリを更新しました。[Upgrade](#upgrade) を参照し更新をお願いします。
+  - 最新の Transformers を前提とした一部のモデルファイル（Text Encoder が position_id を持たないもの）が読み込めるようになりました。
+- `torch.compile` がサポートされしました（実験的）。 PR [#1024](https://github.com/kohya-ss/sd-scripts/pull/1024) p1atdev 氏に感謝します。
+  - Linux または WSL でのみ動作します。
+  - 各学習スクリプトで `--torch_compile` オプションを指定してください。
+  - `--dynamo_backend` オプションで使用される backend を選択できます。デフォルトは `"inductor"` です。 `inductor` または `eager` が動作するようです。
+  - `--xformers` オプションとは互換性がありません。 代わりに `--sdpa` オプションを使用してください。
+  - PyTorch 2.1以降を推奨します。
+  - 詳細は [PR](https://github.com/kohya-ss/sd-scripts/pull/1024) をご覧ください。
+- wandb 保存時のセッション名が各学習スクリプトの `--wandb_run_name` オプションで指定できるようになりました。 PR [#1032](https://github.com/kohya-ss/sd-scripts/pull/1032) hopl1t 氏に感謝します。
+- IPEX ライブラリが更新されました。[PR #1030](https://github.com/kohya-ss/sd-scripts/pull/1030) Disty0 氏に感謝します。
+- Diffusers 形式でのモデル保存ができなくなっていた不具合を修正しました。
 
-- Fixed several bugs.
-  - The state is saved even when the `--save_state` option is not specified in `fine_tune.py` and `train_db.py`. [PR #521](https://github.com/kohya-ss/sd-scripts/pull/521) Thanks to akshaal!
-  - Cannot load LoRA without `alpha`. [PR #527](https://github.com/kohya-ss/sd-scripts/pull/527) Thanks to Manjiz!
-  - Minor changes to console output during sample generation. [PR #515](https://github.com/kohya-ss/sd-scripts/pull/515) Thanks to yanhuifair!
-- The generation script now uses xformers for VAE as well.
-- いくつかのバグ修正を行いました。
-  -  `fine_tune.py`と`train_db.py`で`--save_state`オプション未指定時にもstateが保存される。 [PR #521](https://github.com/kohya-ss/sd-scripts/pull/521) akshaal氏に感謝します。
-  - `alpha`を持たないLoRAを読み込めない。[PR #527](https://github.com/kohya-ss/sd-scripts/pull/527) Manjiz氏に感謝します。
-  - サンプル生成時のコンソール出力の軽微な変更。[PR #515](https://github.com/kohya-ss/sd-scripts/pull/515) yanhuifair氏に感謝します。
-- 生成スクリプトでVAEについてもxformersを使うようにしました。
-
-### 16 May 2023, 2023/05/16
-
-- Fixed an issue where an error would occur if the encoding of the prompt file was different from the default. [PR #510](https://github.com/kohya-ss/sd-scripts/pull/510) Thanks to sdbds!
-  - Please save the prompt file in UTF-8.
-- プロンプトファイルのエンコーディングがデフォルトと異なる場合にエラーが発生する問題を修正しました。 [PR #510](https://github.com/kohya-ss/sd-scripts/pull/510) sdbds氏に感謝します。
-  - プロンプトファイルはUTF-8で保存してください。
-
-### 15 May 2023, 2023/05/15
-
-- Added [English translation of documents](https://github.com/darkstorm2150/sd-scripts#links-to-usage-documentation) by darkstorm2150. Thank you very much!
-- The prompt for sample generation during training can now be specified in `.toml` or `.json`. [PR #504](https://github.com/kohya-ss/sd-scripts/pull/504) Thanks to Linaqruf!
-  - For details on prompt description, please see the PR.
-
-- darkstorm2150氏に[ドキュメント類を英訳](https://github.com/darkstorm2150/sd-scripts#links-to-usage-documentation)していただきました。ありがとうございます！
-- 学習中のサンプル生成のプロンプトを`.toml`または`.json`で指定可能になりました。 [PR #504](https://github.com/kohya-ss/sd-scripts/pull/504) Linaqruf氏に感謝します。
-  - プロンプト記述の詳細は当該PRをご覧ください。
-
-### 11 May 2023, 2023/05/11
-
-- Added an option `--dim_from_weights` to `train_network.py` to automatically determine the dim(rank) from the weight file. [PR #491](https://github.com/kohya-ss/sd-scripts/pull/491) Thanks to AI-Casanova!
-  - It is useful in combination with `resize_lora.py`. Please see the PR for details.
-- Fixed a bug where the noise resolution was incorrect with Multires noise. [PR #489](https://github.com/kohya-ss/sd-scripts/pull/489) Thanks to sdbds!
-  - Please see the PR for details.
-- The image generation scripts can now use img2img and highres fix at the same time.
-- Fixed a bug where the hint image of ControlNet was incorrectly BGR instead of RGB in the image generation scripts.
-- Added a feature to the image generation scripts to use the memory-efficient VAE.
-  - If you specify a number with the `--vae_slices` option, the memory-efficient VAE will be used. The maximum output size will be larger, but it will be slower. Please specify a value of about `16` or `32`.
-  - The implementation of the VAE is in `library/slicing_vae.py`.
-
-- `train_network.py`にdim(rank)を重みファイルから自動決定するオプション`--dim_from_weights`が追加されました。 [PR #491](https://github.com/kohya-ss/sd-scripts/pull/491) AI-Casanova氏に感謝します。
-  - `resize_lora.py`と組み合わせると有用です。詳細はPRもご参照ください。
-- Multires noiseでノイズ解像度が正しくない不具合が修正されました。 [PR #489](https://github.com/kohya-ss/sd-scripts/pull/489)  sdbds氏に感謝します。
-  - 詳細は当該PRをご参照ください。
-- 生成スクリプトでimg2imgとhighres fixを同時に使用できるようにしました。
-- 生成スクリプトでControlNetのhint画像が誤ってBGRだったのをRGBに修正しました。
-- 生成スクリプトで省メモリ化VAEを使えるよう機能追加しました。
-  - `--vae_slices`オプションに数値を指定すると、省メモリ化VAEを用います。出力可能な最大サイズが大きくなりますが、遅くなります。`16`または`32`程度の値を指定してください。
-  - VAEの実装は`library/slicing_vae.py`にあります。
-
-### 7 May 2023, 2023/05/07
-
-- The documentation has been moved to the `docs` folder. If you have links, please change them.
-- Removed `gradio` from `requirements.txt`.
-- DAdaptAdaGrad, DAdaptAdan, and DAdaptSGD are now supported by DAdaptation. [PR#455](https://github.com/kohya-ss/sd-scripts/pull/455) Thanks to sdbds!
-  - DAdaptation needs to be installed. Also, depending on the optimizer, DAdaptation may need to be updated. Please update with `pip install --upgrade dadaptation`.
-- Added support for pre-calculation of LoRA weights in image generation scripts. Specify `--network_pre_calc`.
-  - The prompt option `--am` is available. Also, it is disabled when Regional LoRA is used.
-- Added Adaptive noise scale to each training script. Specify a number with `--adaptive_noise_scale` to enable it.
-  - __Experimental option. It may be removed or changed in the future.__
-  - This is an original implementation that automatically adjusts the value of the noise offset according to the absolute value of the mean of each channel of the latents. It is expected that appropriate noise offsets will be set for bright and dark images, respectively.
-  - Specify it together with `--noise_offset`.
-  - The actual value of the noise offset is calculated as `noise_offset + abs(mean(latents, dim=(2,3))) * adaptive_noise_scale`. Since the latent is close to a normal distribution, it may be a good idea to specify a value of about 1/10 to the same as the noise offset.
-  - Negative values can also be specified, in which case the noise offset will be clipped to 0 or more.
-- Other minor fixes.
-
-- ドキュメントを`docs`フォルダに移動しました。リンク等を張られている場合は変更をお願いいたします。
-- `requirements.txt`から`gradio`を削除しました。
-- DAdaptationで新しくDAdaptAdaGrad、DAdaptAdan、DAdaptSGDがサポートされました。[PR#455](https://github.com/kohya-ss/sd-scripts/pull/455) sdbds氏に感謝します。
-  - dadaptationのインストールが必要です。またオプティマイザによってはdadaptationの更新が必要です。`pip install --upgrade dadaptation`で更新してください。
-- 画像生成スクリプトでLoRAの重みの事前計算をサポートしました。`--network_pre_calc`を指定してください。
-  - プロンプトオプションの`--am`が利用できます。またRegional LoRA使用時には無効になります。
-- 各学習スクリプトにAdaptive noise scaleを追加しました。`--adaptive_noise_scale`で数値を指定すると有効になります。
-  - __実験的オプションです。将来的に削除、仕様変更される可能性があります。__
-  - Noise offsetの値を、latentsの各チャネルの平均値の絶対値に応じて自動調整するオプションです。独自の実装で、明るい画像、暗い画像に対してそれぞれ適切なnoise offsetが設定されることが期待されます。
-  - `--noise_offset` と同時に指定してください。
-  - 実際のNoise offsetの値は `noise_offset + abs(mean(latents, dim=(2,3))) * adaptive_noise_scale` で計算されます。 latentは正規分布に近いためnoise_offsetの1/10～同程度の値を指定するとよいかもしれません。
-  - 負の値も指定でき、その場合はnoise offsetは0以上にclipされます。
-- その他の細かい修正を行いました。
 
 Please read [Releases](https://github.com/kohya-ss/sd-scripts/releases) for recent updates.
 最近の更新情報は [Release](https://github.com/kohya-ss/sd-scripts/releases) をご覧ください。

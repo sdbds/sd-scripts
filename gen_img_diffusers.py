@@ -65,6 +65,11 @@ import re
 import diffusers
 import numpy as np
 import torch
+
+from library.ipex_interop import init_ipex
+
+init_ipex()
+
 import torchvision
 from diffusers import (
     AutoencoderKL,
@@ -79,11 +84,10 @@ from diffusers import (
     HeunDiscreteScheduler,
     KDPM2DiscreteScheduler,
     KDPM2AncestralDiscreteScheduler,
-    UNet2DConditionModel,
+    # UNet2DConditionModel,
     StableDiffusionPipeline,
 )
 from einops import rearrange
-from torch import einsum
 from tqdm import tqdm
 from torchvision import transforms
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPModel, CLIPTextConfig
@@ -96,14 +100,10 @@ import library.train_util as train_util
 from networks.lora import LoRANetwork
 import tools.original_control_net as original_control_net
 from tools.original_control_net import ControlNetInfo
+from library.original_unet import UNet2DConditionModel, InferUNet2DConditionModel
+from library.original_unet import FlashAttentionFunction
 
 from XTI_hijack import unet_forward_XTI, downblock_forward_XTI, upblock_forward_XTI
-
-# Tokenizer: checkpointから読み込むのではなくあらかじめ提供されているものを使う
-TOKENIZER_PATH = "openai/clip-vit-large-patch14"
-V2_STABLE_DIFFUSION_PATH = "stabilityai/stable-diffusion-2"  # ここからtokenizerだけ使う
-
-DEFAULT_TOKEN_LENGTH = 75
 
 # scheduler:
 SCHEDULER_LINEAR_START = 0.00085
@@ -136,336 +136,42 @@ USE_CUTOUTS = False
 高速化のためのモジュール入れ替え
 """
 
-# FlashAttentionを使うCrossAttention
-# based on https://github.com/lucidrains/memory-efficient-attention-pytorch/blob/main/memory_efficient_attention_pytorch/flash_attention.py
-# LICENSE MIT https://github.com/lucidrains/memory-efficient-attention-pytorch/blob/main/LICENSE
 
-# constants
+def replace_unet_modules(unet: diffusers.models.unet_2d_condition.UNet2DConditionModel, mem_eff_attn, xformers, sdpa):
+    if mem_eff_attn:
+        print("Enable memory efficient attention for U-Net")
 
-EPSILON = 1e-6
+        # これはDiffusersのU-Netではなく自前のU-Netなので置き換えなくても良い
+        unet.set_use_memory_efficient_attention(False, True)
+    elif xformers:
+        print("Enable xformers for U-Net")
+        try:
+            import xformers.ops
+        except ImportError:
+            raise ImportError("No xformers / xformersがインストールされていないようです")
 
-# helper functions
-
-
-def exists(val):
-    return val is not None
-
-
-def default(val, d):
-    return val if exists(val) else d
-
-
-# flash attention forwards and backwards
-
-# https://arxiv.org/abs/2205.14135
-
-
-class FlashAttentionFunction(torch.autograd.Function):
-    @staticmethod
-    @torch.no_grad()
-    def forward(ctx, q, k, v, mask, causal, q_bucket_size, k_bucket_size):
-        """Algorithm 2 in the paper"""
-
-        device = q.device
-        dtype = q.dtype
-        max_neg_value = -torch.finfo(q.dtype).max
-        qk_len_diff = max(k.shape[-2] - q.shape[-2], 0)
-
-        o = torch.zeros_like(q)
-        all_row_sums = torch.zeros((*q.shape[:-1], 1), dtype=dtype, device=device)
-        all_row_maxes = torch.full((*q.shape[:-1], 1), max_neg_value, dtype=dtype, device=device)
-
-        scale = q.shape[-1] ** -0.5
-
-        if not exists(mask):
-            mask = (None,) * math.ceil(q.shape[-2] / q_bucket_size)
-        else:
-            mask = rearrange(mask, "b n -> b 1 1 n")
-            mask = mask.split(q_bucket_size, dim=-1)
-
-        row_splits = zip(
-            q.split(q_bucket_size, dim=-2),
-            o.split(q_bucket_size, dim=-2),
-            mask,
-            all_row_sums.split(q_bucket_size, dim=-2),
-            all_row_maxes.split(q_bucket_size, dim=-2),
-        )
-
-        for ind, (qc, oc, row_mask, row_sums, row_maxes) in enumerate(row_splits):
-            q_start_index = ind * q_bucket_size - qk_len_diff
-
-            col_splits = zip(
-                k.split(k_bucket_size, dim=-2),
-                v.split(k_bucket_size, dim=-2),
-            )
-
-            for k_ind, (kc, vc) in enumerate(col_splits):
-                k_start_index = k_ind * k_bucket_size
-
-                attn_weights = einsum("... i d, ... j d -> ... i j", qc, kc) * scale
-
-                if exists(row_mask):
-                    attn_weights.masked_fill_(~row_mask, max_neg_value)
-
-                if causal and q_start_index < (k_start_index + k_bucket_size - 1):
-                    causal_mask = torch.ones((qc.shape[-2], kc.shape[-2]), dtype=torch.bool, device=device).triu(
-                        q_start_index - k_start_index + 1
-                    )
-                    attn_weights.masked_fill_(causal_mask, max_neg_value)
-
-                block_row_maxes = attn_weights.amax(dim=-1, keepdims=True)
-                attn_weights -= block_row_maxes
-                exp_weights = torch.exp(attn_weights)
-
-                if exists(row_mask):
-                    exp_weights.masked_fill_(~row_mask, 0.0)
-
-                block_row_sums = exp_weights.sum(dim=-1, keepdims=True).clamp(min=EPSILON)
-
-                new_row_maxes = torch.maximum(block_row_maxes, row_maxes)
-
-                exp_values = einsum("... i j, ... j d -> ... i d", exp_weights, vc)
-
-                exp_row_max_diff = torch.exp(row_maxes - new_row_maxes)
-                exp_block_row_max_diff = torch.exp(block_row_maxes - new_row_maxes)
-
-                new_row_sums = exp_row_max_diff * row_sums + exp_block_row_max_diff * block_row_sums
-
-                oc.mul_((row_sums / new_row_sums) * exp_row_max_diff).add_((exp_block_row_max_diff / new_row_sums) * exp_values)
-
-                row_maxes.copy_(new_row_maxes)
-                row_sums.copy_(new_row_sums)
-
-        ctx.args = (causal, scale, mask, q_bucket_size, k_bucket_size)
-        ctx.save_for_backward(q, k, v, o, all_row_sums, all_row_maxes)
-
-        return o
-
-    @staticmethod
-    @torch.no_grad()
-    def backward(ctx, do):
-        """Algorithm 4 in the paper"""
-
-        causal, scale, mask, q_bucket_size, k_bucket_size = ctx.args
-        q, k, v, o, l, m = ctx.saved_tensors
-
-        device = q.device
-
-        max_neg_value = -torch.finfo(q.dtype).max
-        qk_len_diff = max(k.shape[-2] - q.shape[-2], 0)
-
-        dq = torch.zeros_like(q)
-        dk = torch.zeros_like(k)
-        dv = torch.zeros_like(v)
-
-        row_splits = zip(
-            q.split(q_bucket_size, dim=-2),
-            o.split(q_bucket_size, dim=-2),
-            do.split(q_bucket_size, dim=-2),
-            mask,
-            l.split(q_bucket_size, dim=-2),
-            m.split(q_bucket_size, dim=-2),
-            dq.split(q_bucket_size, dim=-2),
-        )
-
-        for ind, (qc, oc, doc, row_mask, lc, mc, dqc) in enumerate(row_splits):
-            q_start_index = ind * q_bucket_size - qk_len_diff
-
-            col_splits = zip(
-                k.split(k_bucket_size, dim=-2),
-                v.split(k_bucket_size, dim=-2),
-                dk.split(k_bucket_size, dim=-2),
-                dv.split(k_bucket_size, dim=-2),
-            )
-
-            for k_ind, (kc, vc, dkc, dvc) in enumerate(col_splits):
-                k_start_index = k_ind * k_bucket_size
-
-                attn_weights = einsum("... i d, ... j d -> ... i j", qc, kc) * scale
-
-                if causal and q_start_index < (k_start_index + k_bucket_size - 1):
-                    causal_mask = torch.ones((qc.shape[-2], kc.shape[-2]), dtype=torch.bool, device=device).triu(
-                        q_start_index - k_start_index + 1
-                    )
-                    attn_weights.masked_fill_(causal_mask, max_neg_value)
-
-                exp_attn_weights = torch.exp(attn_weights - mc)
-
-                if exists(row_mask):
-                    exp_attn_weights.masked_fill_(~row_mask, 0.0)
-
-                p = exp_attn_weights / lc
-
-                dv_chunk = einsum("... i j, ... i d -> ... j d", p, doc)
-                dp = einsum("... i d, ... j d -> ... i j", doc, vc)
-
-                D = (doc * oc).sum(dim=-1, keepdims=True)
-                ds = p * scale * (dp - D)
-
-                dq_chunk = einsum("... i j, ... j d -> ... i d", ds, kc)
-                dk_chunk = einsum("... i j, ... i d -> ... j d", ds, qc)
-
-                dqc.add_(dq_chunk)
-                dkc.add_(dk_chunk)
-                dvc.add_(dv_chunk)
-
-        return dq, dk, dv, None, None, None, None
+        unet.set_use_memory_efficient_attention(True, False)
+    elif sdpa:
+        print("Enable SDPA for U-Net")
+        unet.set_use_memory_efficient_attention(False, False)
+        unet.set_use_sdpa(True)
 
 
 # TODO common train_util.py
-def replace_unet_modules(unet: diffusers.models.unet_2d_condition.UNet2DConditionModel, mem_eff_attn, xformers):
-    if mem_eff_attn:
-        replace_unet_cross_attn_to_memory_efficient()
-    elif xformers:
-        replace_unet_cross_attn_to_xformers()
-
-
-def replace_unet_cross_attn_to_memory_efficient():
-    print("CrossAttention.forward has been replaced to FlashAttention (not xformers) and NAI style Hypernetwork")
-    flash_func = FlashAttentionFunction
-
-    def forward_flash_attn(self, x, context=None, mask=None):
-        q_bucket_size = 512
-        k_bucket_size = 1024
-
-        h = self.heads
-        q = self.to_q(x)
-
-        context = context if context is not None else x
-        context = context.to(x.dtype)
-
-        if hasattr(self, "hypernetwork") and self.hypernetwork is not None:
-            context_k, context_v = self.hypernetwork.forward(x, context)
-            context_k = context_k.to(x.dtype)
-            context_v = context_v.to(x.dtype)
-        else:
-            context_k = context
-            context_v = context
-
-        k = self.to_k(context_k)
-        v = self.to_v(context_v)
-        del context, x
-
-        q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=h), (q, k, v))
-
-        out = flash_func.apply(q, k, v, mask, False, q_bucket_size, k_bucket_size)
-
-        out = rearrange(out, "b h n d -> b n (h d)")
-
-        # diffusers 0.7.0~
-        out = self.to_out[0](out)
-        out = self.to_out[1](out)
-        return out
-
-    diffusers.models.attention.CrossAttention.forward = forward_flash_attn
-
-
-def replace_unet_cross_attn_to_xformers():
-    print("CrossAttention.forward has been replaced to enable xformers and NAI style Hypernetwork")
-    try:
-        import xformers.ops
-    except ImportError:
-        raise ImportError("No xformers / xformersがインストールされていないようです")
-
-    def forward_xformers(self, x, context=None, mask=None):
-        h = self.heads
-        q_in = self.to_q(x)
-
-        context = default(context, x)
-        context = context.to(x.dtype)
-
-        if hasattr(self, "hypernetwork") and self.hypernetwork is not None:
-            context_k, context_v = self.hypernetwork.forward(x, context)
-            context_k = context_k.to(x.dtype)
-            context_v = context_v.to(x.dtype)
-        else:
-            context_k = context
-            context_v = context
-
-        k_in = self.to_k(context_k)
-        v_in = self.to_v(context_v)
-
-        q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b n h d", h=h), (q_in, k_in, v_in))
-        del q_in, k_in, v_in
-
-        q = q.contiguous()
-        k = k.contiguous()
-        v = v.contiguous()
-        out = xformers.ops.memory_efficient_attention(q, k, v, attn_bias=None)  # 最適なのを選んでくれる
-
-        out = rearrange(out, "b n h d -> b n (h d)", h=h)
-
-        # diffusers 0.7.0~
-        out = self.to_out[0](out)
-        out = self.to_out[1](out)
-        return out
-
-    diffusers.models.attention.CrossAttention.forward = forward_xformers
-
-
-def replace_vae_modules(vae: diffusers.models.AutoencoderKL, mem_eff_attn, xformers):
+def replace_vae_modules(vae: diffusers.models.AutoencoderKL, mem_eff_attn, xformers, sdpa):
     if mem_eff_attn:
         replace_vae_attn_to_memory_efficient()
     elif xformers:
-        # とりあえずDiffusersのxformersを使う。AttentionがあるのはMidBlockのみ
-        print("Use Diffusers xformers for VAE")
-        vae.set_use_memory_efficient_attention_xformers(True)
-
-    """
-    # VAEがbfloat16でメモリ消費が大きい問題を解決する
-    upsamplers = []
-    for block in vae.decoder.up_blocks:
-        if block.upsamplers is not None:
-            upsamplers.extend(block.upsamplers)
-
-    def forward_upsample(_self, hidden_states, output_size=None):
-        assert hidden_states.shape[1] == _self.channels
-        if _self.use_conv_transpose:
-            return _self.conv(hidden_states)
-
-        dtype = hidden_states.dtype
-        if dtype == torch.bfloat16:
-            assert output_size is None
-            # repeat_interleaveはすごく遅いが、回数はあまり呼ばれないので許容する
-            hidden_states = hidden_states.repeat_interleave(2, dim=-1)
-            hidden_states = hidden_states.repeat_interleave(2, dim=-2)
-        else:
-            if hidden_states.shape[0] >= 64:
-                hidden_states = hidden_states.contiguous()
-
-            # if `output_size` is passed we force the interpolation output
-            # size and do not make use of `scale_factor=2`
-            if output_size is None:
-                hidden_states = torch.nn.functional.interpolate(hidden_states, scale_factor=2.0, mode="nearest")
-            else:
-                hidden_states = torch.nn.functional.interpolate(hidden_states, size=output_size, mode="nearest")
-
-        if _self.use_conv:
-            if _self.name == "conv":
-                hidden_states = _self.conv(hidden_states)
-            else:
-                hidden_states = _self.Conv2d_0(hidden_states)
-        return hidden_states
-
-    # replace upsamplers
-    for upsampler in upsamplers:
-        # make new scope
-        def make_replacer(upsampler):
-            def forward(hidden_states, output_size=None):
-                return forward_upsample(upsampler, hidden_states, output_size)
-
-            return forward
-
-        upsampler.forward = make_replacer(upsampler)
-"""
+        replace_vae_attn_to_xformers()
+    elif sdpa:
+        replace_vae_attn_to_sdpa()
 
 
 def replace_vae_attn_to_memory_efficient():
-    print("AttentionBlock.forward has been replaced to FlashAttention (not xformers)")
+    print("VAE Attention.forward has been replaced to FlashAttention (not xformers)")
     flash_func = FlashAttentionFunction
 
-    def forward_flash_attn(self, hidden_states):
-        print("forward_flash_attn")
+    def forward_flash_attn(self, hidden_states, **kwargs):
         q_bucket_size = 512
         k_bucket_size = 1024
 
@@ -478,12 +184,12 @@ def replace_vae_attn_to_memory_efficient():
         hidden_states = hidden_states.view(batch, channel, height * width).transpose(1, 2)
 
         # proj to q, k, v
-        query_proj = self.query(hidden_states)
-        key_proj = self.key(hidden_states)
-        value_proj = self.value(hidden_states)
+        query_proj = self.to_q(hidden_states)
+        key_proj = self.to_k(hidden_states)
+        value_proj = self.to_v(hidden_states)
 
         query_proj, key_proj, value_proj = map(
-            lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.num_heads), (query_proj, key_proj, value_proj)
+            lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), (query_proj, key_proj, value_proj)
         )
 
         out = flash_func.apply(query_proj, key_proj, value_proj, None, False, q_bucket_size, k_bucket_size)
@@ -491,14 +197,140 @@ def replace_vae_attn_to_memory_efficient():
         out = rearrange(out, "b h n d -> b n (h d)")
 
         # compute next hidden_states
-        hidden_states = self.proj_attn(hidden_states)
+        # linear proj
+        hidden_states = self.to_out[0](hidden_states)
+        # dropout
+        hidden_states = self.to_out[1](hidden_states)
+
         hidden_states = hidden_states.transpose(-1, -2).reshape(batch, channel, height, width)
 
         # res connect and rescale
         hidden_states = (hidden_states + residual) / self.rescale_output_factor
         return hidden_states
 
-    diffusers.models.attention.AttentionBlock.forward = forward_flash_attn
+    def forward_flash_attn_0_14(self, hidden_states, **kwargs):
+        if not hasattr(self, "to_q"):
+            self.to_q = self.query
+            self.to_k = self.key
+            self.to_v = self.value
+            self.to_out = [self.proj_attn, torch.nn.Identity()]
+            self.heads = self.num_heads
+        return forward_flash_attn(self, hidden_states, **kwargs)
+
+    if diffusers.__version__ < "0.15.0":
+        diffusers.models.attention.AttentionBlock.forward = forward_flash_attn_0_14
+    else:
+        diffusers.models.attention_processor.Attention.forward = forward_flash_attn
+
+
+def replace_vae_attn_to_xformers():
+    print("VAE: Attention.forward has been replaced to xformers")
+    import xformers.ops
+
+    def forward_xformers(self, hidden_states, **kwargs):
+        residual = hidden_states
+        batch, channel, height, width = hidden_states.shape
+
+        # norm
+        hidden_states = self.group_norm(hidden_states)
+
+        hidden_states = hidden_states.view(batch, channel, height * width).transpose(1, 2)
+
+        # proj to q, k, v
+        query_proj = self.to_q(hidden_states)
+        key_proj = self.to_k(hidden_states)
+        value_proj = self.to_v(hidden_states)
+
+        query_proj, key_proj, value_proj = map(
+            lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), (query_proj, key_proj, value_proj)
+        )
+
+        query_proj = query_proj.contiguous()
+        key_proj = key_proj.contiguous()
+        value_proj = value_proj.contiguous()
+        out = xformers.ops.memory_efficient_attention(query_proj, key_proj, value_proj, attn_bias=None)
+
+        out = rearrange(out, "b h n d -> b n (h d)")
+
+        # compute next hidden_states
+        # linear proj
+        hidden_states = self.to_out[0](hidden_states)
+        # dropout
+        hidden_states = self.to_out[1](hidden_states)
+
+        hidden_states = hidden_states.transpose(-1, -2).reshape(batch, channel, height, width)
+
+        # res connect and rescale
+        hidden_states = (hidden_states + residual) / self.rescale_output_factor
+        return hidden_states
+
+    def forward_xformers_0_14(self, hidden_states, **kwargs):
+        if not hasattr(self, "to_q"):
+            self.to_q = self.query
+            self.to_k = self.key
+            self.to_v = self.value
+            self.to_out = [self.proj_attn, torch.nn.Identity()]
+            self.heads = self.num_heads
+        return forward_xformers(self, hidden_states, **kwargs)
+
+    if diffusers.__version__ < "0.15.0":
+        diffusers.models.attention.AttentionBlock.forward = forward_xformers_0_14
+    else:
+        diffusers.models.attention_processor.Attention.forward = forward_xformers
+
+
+def replace_vae_attn_to_sdpa():
+    print("VAE: Attention.forward has been replaced to sdpa")
+
+    def forward_sdpa(self, hidden_states, **kwargs):
+        residual = hidden_states
+        batch, channel, height, width = hidden_states.shape
+
+        # norm
+        hidden_states = self.group_norm(hidden_states)
+
+        hidden_states = hidden_states.view(batch, channel, height * width).transpose(1, 2)
+
+        # proj to q, k, v
+        query_proj = self.to_q(hidden_states)
+        key_proj = self.to_k(hidden_states)
+        value_proj = self.to_v(hidden_states)
+
+        query_proj, key_proj, value_proj = map(
+            lambda t: rearrange(t, "b n (h d) -> b n h d", h=self.heads), (query_proj, key_proj, value_proj)
+        )
+
+        out = torch.nn.functional.scaled_dot_product_attention(
+            query_proj, key_proj, value_proj, attn_mask=None, dropout_p=0.0, is_causal=False
+        )
+
+        out = rearrange(out, "b n h d -> b n (h d)")
+
+        # compute next hidden_states
+        # linear proj
+        hidden_states = self.to_out[0](hidden_states)
+        # dropout
+        hidden_states = self.to_out[1](hidden_states)
+
+        hidden_states = hidden_states.transpose(-1, -2).reshape(batch, channel, height, width)
+
+        # res connect and rescale
+        hidden_states = (hidden_states + residual) / self.rescale_output_factor
+        return hidden_states
+
+    def forward_sdpa_0_14(self, hidden_states, **kwargs):
+        if not hasattr(self, "to_q"):
+            self.to_q = self.query
+            self.to_k = self.key
+            self.to_v = self.value
+            self.to_out = [self.proj_attn, torch.nn.Identity()]
+            self.heads = self.num_heads
+        return forward_sdpa(self, hidden_states, **kwargs)
+
+    if diffusers.__version__ < "0.15.0":
+        diffusers.models.attention.AttentionBlock.forward = forward_sdpa_0_14
+    else:
+        diffusers.models.attention_processor.Attention.forward = forward_sdpa
 
 
 # endregion
@@ -541,7 +373,7 @@ class PipelineLike:
         vae: AutoencoderKL,
         text_encoder: CLIPTextModel,
         tokenizer: CLIPTokenizer,
-        unet: UNet2DConditionModel,
+        unet: InferUNet2DConditionModel,
         scheduler: Union[DDIMScheduler, PNDMScheduler, LMSDiscreteScheduler],
         clip_skip: int,
         clip_model: CLIPModel,
@@ -1110,6 +942,17 @@ class PipelineLike:
         if self.control_nets:
             guided_hints = original_control_net.get_guided_hints(self.control_nets, num_latent_input, batch_size, clip_guide_images)
 
+        if reginonal_network:
+            num_sub_and_neg_prompts = len(text_embeddings) // batch_size
+            # last subprompt and negative prompt
+            text_emb_last = []
+            for j in range(batch_size):
+                text_emb_last.append(text_embeddings[(j + 1) * num_sub_and_neg_prompts - 2])
+                text_emb_last.append(text_embeddings[(j + 1) * num_sub_and_neg_prompts - 1])
+            text_emb_last = torch.stack(text_emb_last)
+        else:
+            text_emb_last = text_embeddings
+
         for i, t in enumerate(tqdm(timesteps)):
             # expand the latents if we are doing classifier free guidance
             latent_model_input = latents.repeat((num_latent_input, 1, 1, 1))
@@ -1117,11 +960,6 @@ class PipelineLike:
 
             # predict the noise residual
             if self.control_nets and self.control_net_enabled:
-                if reginonal_network:
-                    num_sub_and_neg_prompts = len(text_embeddings) // batch_size
-                    text_emb_last = text_embeddings[num_sub_and_neg_prompts - 2 :: num_sub_and_neg_prompts]  # last subprompt
-                else:
-                    text_emb_last = text_embeddings
                 noise_pred = original_control_net.call_unet_and_control_net(
                     i,
                     num_latent_input,
@@ -1131,6 +969,7 @@ class PipelineLike:
                     i / len(timesteps),
                     latent_model_input,
                     t,
+                    text_embeddings,
                     text_emb_last,
                 ).sample
             else:
@@ -2342,6 +2181,18 @@ def main(args):
         tokenizer = loading_pipe.tokenizer
         del loading_pipe
 
+        # Diffusers U-Net to original U-Net
+        original_unet = UNet2DConditionModel(
+            unet.config.sample_size,
+            unet.config.attention_head_dim,
+            unet.config.cross_attention_dim,
+            unet.config.use_linear_projection,
+            unet.config.upcast_attention,
+        )
+        original_unet.load_state_dict(unet.state_dict())
+        unet = original_unet
+    unet: InferUNet2DConditionModel = InferUNet2DConditionModel(unet)
+
     # VAEを読み込む
     if args.vae is not None:
         vae = model_util.load_vae(args.vae, dtype)
@@ -2366,8 +2217,9 @@ def main(args):
 
     # xformers、Hypernetwork対応
     if not args.diffusers_xformers:
-        replace_unet_modules(unet, not args.xformers, args.xformers)
-        replace_vae_modules(vae, not args.xformers, args.xformers)
+        mem_eff = not (args.xformers or args.sdpa)
+        replace_unet_modules(unet, mem_eff, args.xformers, args.sdpa)
+        replace_vae_modules(vae, mem_eff, args.xformers, args.sdpa)
 
     # tokenizerを読み込む
     print("loading tokenizer")
@@ -2496,13 +2348,20 @@ def main(args):
         vae = sli_vae
         del sli_vae
     vae.to(dtype).to(device)
+    vae.eval()
 
     text_encoder.to(dtype).to(device)
     unet.to(dtype).to(device)
+
+    text_encoder.eval()
+    unet.eval()
+
     if clip_model is not None:
         clip_model.to(dtype).to(device)
+        clip_model.eval()
     if vgg16_model is not None:
         vgg16_model.to(dtype).to(device)
+        vgg16_model.eval()
 
     # networkを組み込む
     if args.network_module:
@@ -2510,12 +2369,19 @@ def main(args):
         network_default_muls = []
         network_pre_calc = args.network_pre_calc
 
+        # merge関連の引数を統合する
+        if args.network_merge:
+            network_merge = len(args.network_module)  # all networks are merged
+        elif args.network_merge_n_models:
+            network_merge = args.network_merge_n_models
+        else:
+            network_merge = 0
+
         for i, network_module in enumerate(args.network_module):
             print("import network module:", network_module)
             imported_module = importlib.import_module(network_module)
 
             network_mul = 1.0 if args.network_mul is None or len(args.network_mul) <= i else args.network_mul[i]
-            network_default_muls.append(network_mul)
 
             net_kwargs = {}
             if args.network_args and i < len(args.network_args):
@@ -2526,31 +2392,32 @@ def main(args):
                     key, value = net_arg.split("=")
                     net_kwargs[key] = value
 
-            if args.network_weights and i < len(args.network_weights):
-                network_weight = args.network_weights[i]
-                print("load network weights from:", network_weight)
-
-                if model_util.is_safetensors(network_weight) and args.network_show_meta:
-                    from safetensors.torch import safe_open
-
-                    with safe_open(network_weight, framework="pt") as f:
-                        metadata = f.metadata()
-                    if metadata is not None:
-                        print(f"metadata for: {network_weight}: {metadata}")
-
-                network, weights_sd = imported_module.create_network_from_weights(
-                    network_mul, network_weight, vae, text_encoder, unet, for_inference=True, **net_kwargs
-                )
-            else:
+            if args.network_weights is None or len(args.network_weights) <= i:
                 raise ValueError("No weight. Weight is required.")
+
+            network_weight = args.network_weights[i]
+            print("load network weights from:", network_weight)
+
+            if model_util.is_safetensors(network_weight) and args.network_show_meta:
+                from safetensors.torch import safe_open
+
+                with safe_open(network_weight, framework="pt") as f:
+                    metadata = f.metadata()
+                if metadata is not None:
+                    print(f"metadata for: {network_weight}: {metadata}")
+
+            network, weights_sd = imported_module.create_network_from_weights(
+                network_mul, network_weight, vae, text_encoder, unet, for_inference=True, **net_kwargs
+            )
             if network is None:
                 return
 
             mergeable = network.is_mergeable()
-            if args.network_merge and not mergeable:
+            if network_merge and not mergeable:
                 print("network is not mergiable. ignore merge option.")
 
-            if not args.network_merge or not mergeable:
+            if not mergeable or i >= network_merge:
+                # not merging
                 network.apply_to(text_encoder, unet)
                 info = network.load_state_dict(weights_sd, False)  # network.load_weightsを使うようにするとよい
                 print(f"weights are loaded: {info}")
@@ -2564,6 +2431,7 @@ def main(args):
                     network.backup_weights()
 
                 networks.append(network)
+                network_default_muls.append(network_mul)
             else:
                 network.merge_to(text_encoder, unet, weights_sd, dtype, device)
 
@@ -2635,6 +2503,10 @@ def main(args):
 
     if args.diffusers_xformers:
         pipe.enable_xformers_memory_efficient_attention()
+
+    # Deep Shrink
+    if args.ds_depth_1 is not None:
+        unet.set_deep_shrink(args.ds_depth_1, args.ds_timesteps_1, args.ds_depth_2, args.ds_timesteps_2, args.ds_ratio)
 
     # Extended Textual Inversion および Textual Inversionを処理する
     if args.XTI_embeddings:
@@ -2859,9 +2731,18 @@ def main(args):
 
         size = None
         for i, network in enumerate(networks):
-            if i < 3:
+            if (i < 3 and args.network_regional_mask_max_color_codes is None) or i < args.network_regional_mask_max_color_codes:
                 np_mask = np.array(mask_images[0])
-                np_mask = np_mask[:, :, i]
+
+                if args.network_regional_mask_max_color_codes:
+                    # カラーコードでマスクを指定する
+                    ch0 = (i + 1) & 1
+                    ch1 = ((i + 1) >> 1) & 1
+                    ch2 = ((i + 1) >> 2) & 1
+                    np_mask = np.all(np_mask == np.array([ch0, ch1, ch2]) * 255, axis=2)
+                    np_mask = np_mask.astype(np.uint8) * 255
+                else:
+                    np_mask = np_mask[:, :, i]
                 size = np_mask.shape
             else:
                 np_mask = np.full(size, 255, dtype=np.uint8)
@@ -2906,6 +2787,10 @@ def main(args):
     for gen_iter in range(args.n_iter):
         print(f"iteration {gen_iter+1}/{args.n_iter}")
         iter_seed = random.randint(0, 0x7FFFFFFF)
+
+        # shuffle prompt list
+        if args.shuffle_prompts:
+            random.shuffle(prompt_list)
 
         # バッチ処理の関数
         def process_batch(batch: List[BatchData], highres_fix, highres_1st=False):
@@ -3124,6 +3009,8 @@ def main(args):
             for i, (image, prompt, negative_prompts, seed, clip_prompt) in enumerate(
                 zip(images, prompts, negative_prompts, seeds, clip_prompts)
             ):
+                if highres_fix:
+                    seed -= 1  # record original seed
                 metadata = PngInfo()
                 metadata.add_text("prompt", prompt)
                 metadata.add_text("seed", str(seed))
@@ -3205,6 +3092,13 @@ def main(args):
                     clip_prompt = None
                     network_muls = None
 
+                    # Deep Shrink
+                    ds_depth_1 = None  # means no override
+                    ds_timesteps_1 = args.ds_timesteps_1
+                    ds_depth_2 = args.ds_depth_2
+                    ds_timesteps_2 = args.ds_timesteps_2
+                    ds_ratio = args.ds_ratio
+
                     prompt_args = raw_prompt.strip().split(" --")
                     prompt = prompt_args[0]
                     print(f"prompt {prompt_index+1}/{len(prompt_list)}: {prompt}")
@@ -3276,9 +3170,50 @@ def main(args):
                                 print(f"network mul: {network_muls}")
                                 continue
 
+                            # Deep Shrink
+                            m = re.match(r"dsd1 ([\d\.]+)", parg, re.IGNORECASE)
+                            if m:  # deep shrink depth 1
+                                ds_depth_1 = int(m.group(1))
+                                print(f"deep shrink depth 1: {ds_depth_1}")
+                                continue
+
+                            m = re.match(r"dst1 ([\d\.]+)", parg, re.IGNORECASE)
+                            if m:  # deep shrink timesteps 1
+                                ds_timesteps_1 = int(m.group(1))
+                                ds_depth_1 = ds_depth_1 if ds_depth_1 is not None else -1  # -1 means override
+                                print(f"deep shrink timesteps 1: {ds_timesteps_1}")
+                                continue
+
+                            m = re.match(r"dsd2 ([\d\.]+)", parg, re.IGNORECASE)
+                            if m:  # deep shrink depth 2
+                                ds_depth_2 = int(m.group(1))
+                                ds_depth_1 = ds_depth_1 if ds_depth_1 is not None else -1  # -1 means override
+                                print(f"deep shrink depth 2: {ds_depth_2}")
+                                continue
+
+                            m = re.match(r"dst2 ([\d\.]+)", parg, re.IGNORECASE)
+                            if m:  # deep shrink timesteps 2
+                                ds_timesteps_2 = int(m.group(1))
+                                ds_depth_1 = ds_depth_1 if ds_depth_1 is not None else -1  # -1 means override
+                                print(f"deep shrink timesteps 2: {ds_timesteps_2}")
+                                continue
+
+                            m = re.match(r"dsr ([\d\.]+)", parg, re.IGNORECASE)
+                            if m:  # deep shrink ratio
+                                ds_ratio = float(m.group(1))
+                                ds_depth_1 = ds_depth_1 if ds_depth_1 is not None else -1  # -1 means override
+                                print(f"deep shrink ratio: {ds_ratio}")
+                                continue
+
                         except ValueError as ex:
                             print(f"Exception in parsing / 解析エラー: {parg}")
                             print(ex)
+
+                # override Deep Shrink
+                if ds_depth_1 is not None:
+                    if ds_depth_1 < 0:
+                        ds_depth_1 = args.ds_depth_1 or 3
+                    unet.set_deep_shrink(ds_depth_1, ds_timesteps_1, ds_depth_2, ds_timesteps_2, ds_ratio)
 
                 # prepare seed
                 if seeds is not None:  # given in prompt
@@ -3293,7 +3228,7 @@ def main(args):
                             print("predefined seeds are exhausted")
                             seed = None
                     elif args.iter_same_seed:
-                        seeds = iter_seed
+                        seed = iter_seed
                     else:
                         seed = None  # 前のを消す
 
@@ -3480,9 +3415,15 @@ def setup_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use same seed for all prompts in iteration if no seed specified / 乱数seedの指定がないとき繰り返し内はすべて同じseedを使う（プロンプト間の差異の比較用）",
     )
+    parser.add_argument(
+        "--shuffle_prompts",
+        action="store_true",
+        help="shuffle prompts in iteration / 繰り返し内のプロンプトをシャッフルする",
+    )
     parser.add_argument("--fp16", action="store_true", help="use fp16 / fp16を指定し省メモリ化する")
     parser.add_argument("--bf16", action="store_true", help="use bfloat16 / bfloat16を指定し省メモリ化する")
     parser.add_argument("--xformers", action="store_true", help="use xformers / xformersを使用し高速化する")
+    parser.add_argument("--sdpa", action="store_true", help="use sdpa in PyTorch 2 / sdpa")
     parser.add_argument(
         "--diffusers_xformers",
         action="store_true",
@@ -3499,12 +3440,21 @@ def setup_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--network_mul", type=float, default=None, nargs="*", help="additional network multiplier / 追加ネットワークの効果の倍率")
     parser.add_argument(
-        "--network_args", type=str, default=None, nargs="*", help="additional argmuments for network (key=value) / ネットワークへの追加の引数"
+        "--network_args", type=str, default=None, nargs="*", help="additional arguments for network (key=value) / ネットワークへの追加の引数"
     )
     parser.add_argument("--network_show_meta", action="store_true", help="show metadata of network model / ネットワークモデルのメタデータを表示する")
+    parser.add_argument(
+        "--network_merge_n_models", type=int, default=None, help="merge this number of networks / この数だけネットワークをマージする"
+    )
     parser.add_argument("--network_merge", action="store_true", help="merge network weights to original model / ネットワークの重みをマージする")
     parser.add_argument(
         "--network_pre_calc", action="store_true", help="pre-calculate network for generation / ネットワークのあらかじめ計算して生成する"
+    )
+    parser.add_argument(
+        "--network_regional_mask_max_color_codes",
+        type=int,
+        default=None,
+        help="max color codes for regional mask (default is None, mask by channel) / regional maskの最大色数（デフォルトはNoneでチャンネルごとのマスク）",
     )
     parser.add_argument(
         "--textual_inversion_embeddings",
@@ -3525,7 +3475,7 @@ def setup_parser() -> argparse.ArgumentParser:
         "--max_embeddings_multiples",
         type=int,
         default=None,
-        help="max embeding multiples, max token length is 75 * multiples / トークン長をデフォルトの何倍とするか 75*この値 がトークン長となる",
+        help="max embedding multiples, max token length is 75 * multiples / トークン長をデフォルトの何倍とするか 75*この値 がトークン長となる",
     )
     parser.add_argument(
         "--clip_guidance_scale",
@@ -3584,7 +3534,7 @@ def setup_parser() -> argparse.ArgumentParser:
         "--highres_fix_upscaler_args",
         type=str,
         default=None,
-        help="additional argmuments for upscaler (key=value) / upscalerへの追加の引数",
+        help="additional arguments for upscaler (key=value) / upscalerへの追加の引数",
     )
     parser.add_argument(
         "--highres_fix_disable_control_net",
@@ -3613,6 +3563,30 @@ def setup_parser() -> argparse.ArgumentParser:
     # parser.add_argument(
     #     "--control_net_image_path", type=str, default=None, nargs="*", help="image for ControlNet guidance / ControlNetでガイドに使う画像"
     # )
+
+    # Deep Shrink
+    parser.add_argument(
+        "--ds_depth_1",
+        type=int,
+        default=None,
+        help="Enable Deep Shrink with this depth 1, valid values are 0 to 3 / Deep Shrinkをこのdepthで有効にする",
+    )
+    parser.add_argument(
+        "--ds_timesteps_1",
+        type=int,
+        default=650,
+        help="Apply Deep Shrink depth 1 until this timesteps / Deep Shrink depth 1を適用するtimesteps",
+    )
+    parser.add_argument("--ds_depth_2", type=int, default=None, help="Deep Shrink depth 2 / Deep Shrinkのdepth 2")
+    parser.add_argument(
+        "--ds_timesteps_2",
+        type=int,
+        default=650,
+        help="Apply Deep Shrink depth 2 until this timesteps / Deep Shrink depth 2を適用するtimesteps",
+    )
+    parser.add_argument(
+        "--ds_ratio", type=float, default=0.5, help="Deep Shrink ratio for downsampling / Deep Shrinkのdownsampling比率"
+    )
 
     return parser
 
