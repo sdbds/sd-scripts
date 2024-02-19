@@ -1,3 +1,99 @@
+# Training Stable Cascade Stage C 
+
+This is an experimental feature. There may be bugs.
+
+## Usage
+
+Training is run with `stable_cascade_train_stage_c.py`.
+
+The main options are the same as `sdxl_train.py`. The following options have been added.
+
+- `--effnet_checkpoint_path`: Specifies the path to the EfficientNetEncoder weights.
+- `--stage_c_checkpoint_path`: Specifies the path to the Stage C weights.
+- `--text_model_checkpoint_path`: Specifies the path to the Text Encoder weights. If omitted, the model from Hugging Face will be used.
+- `--save_text_model`: Saves the model downloaded from Hugging Face to `--text_model_checkpoint_path`.
+- `--previewer_checkpoint_path`: Specifies the path to the Previewer weights. Used to generate sample images during training.
+- `--adaptive_loss_weight`: Uses [Adaptive Loss Weight](https://github.com/Stability-AI/StableCascade/blob/master/gdf/loss_weights.py) . If omitted, P2LossWeight is used. The official settings use Adaptive Loss Weight.
+
+The learning rate is set to 1e-4 in the official settings.
+
+The first time, specify `--text_model_checkpoint_path` and `--save_text_model` to save the Text Encoder weights. From the next time, specify `--text_model_checkpoint_path` to load the saved weights.
+
+Sample image generation during training is done with Perviewer. Perviewer is a simple decoder that converts EfficientNetEncoder latents to images.
+
+Some of the options for SDXL are simply ignored or cause an error (especially noise-related options such as `--noise_offset`). `--vae_batch_size` and `--no_half_vae` are applied directly to the EfficientNetEncoder (when `bf16` is specified for mixed precision, `--no_half_vae` is not necessary).
+
+Options for latents and Text Encoder output caches can be used as is, but since the EfficientNetEncoder is much lighter than the VAE, you may not need to use the cache unless memory is particularly tight.
+
+`--gradient_checkpointing`, `--full_bf16`, and `--full_fp16` (untested) to reduce memory consumption can be used as is.
+
+A scale of about 4 is suitable for sample image generation.
+
+Since the official settings use `bf16` for training, training with `fp16` may be unstable.
+
+The code for training the Text Encoder is also written, but it is untested.
+
+### Command line sample
+
+```batch
+accelerate launch  --mixed_precision bf16 --num_cpu_threads_per_process 1 stable_cascade_train_stage_c.py --mixed_precision bf16 --save_precision bf16 --max_data_loader_n_workers 2 --persistent_data_loader_workers --gradient_checkpointing --learning_rate 1e-4 --optimizer_type adafactor --optimizer_args "scale_parameter=False" "relative_step=False" "warmup_init=False" --max_train_epochs 10 --save_every_n_epochs 1 --save_precision bf16 --output_dir ../output --output_name sc_test - --stage_c_checkpoint_path ../models/stage_c_bf16.safetensors --effnet_checkpoint_path ../models/effnet_encoder.safetensors --previewer_checkpoint_path ../models/previewer.safetensors --dataset_config ../dataset/config_bs1.toml --sample_every_n_epochs 1 --sample_prompts ../dataset/prompts.txt --adaptive_loss_weight
+```
+
+### About the dataset for fine tuning
+
+If the latents cache files for SD/SDXL exist (extension `*.npz`), it will be read and an error will occur during training. Please move them to another location in advance.
+
+After that, run `finetune/prepare_buckets_latents.py` with the `--stable_cascade` option to create latents cache files for Stable Cascade (suffix `_sc_latents.npz` is added).
+
+
+# Stable Cascade Stage C の学習
+
+実験的機能です。不具合があるかもしれません。
+
+## 使い方
+
+学習は `stable_cascade_train_stage_c.py` で行います。
+
+主なオプションは `sdxl_train.py` と同様です。以下のオプションが追加されています。
+
+- `--effnet_checkpoint_path` : EfficientNetEncoder の重みのパスを指定します。
+- `--stage_c_checkpoint_path` : Stage C の重みのパスを指定します。
+- `--text_model_checkpoint_path` : Text Encoder の重みのパスを指定します。省略時は Hugging Face のモデルを使用します。
+- `--save_text_model` : `--text_model_checkpoint_path` にHugging Face からダウンロードしたモデルを保存します。
+- `--previewer_checkpoint_path` : Previewer の重みのパスを指定します。学習中のサンプル画像生成に使用します。
+- `--adaptive_loss_weight` :  [Adaptive Loss Weight](https://github.com/Stability-AI/StableCascade/blob/master/gdf/loss_weights.py) を用います。省略時は P2LossWeight が使用されます。公式では Adaptive Loss Weight が使用されているようです。
+
+学習率は、公式の設定では 1e-4 のようです。
+
+初回は `--text_model_checkpoint_path` と `--save_text_model` を指定して、Text Encoder の重みを保存すると良いでしょう。次からは `--text_model_checkpoint_path` を指定して、保存した重みを読み込むことができます。
+
+学習中のサンプル画像生成は Perviewer で行われます。Previewer は EfficientNetEncoder の latents を画像に変換する簡易的な decoder です。
+
+SDXL の向けの一部のオプションは単に無視されるか、エラーになります（特に `--noise_offset` などのノイズ関係）。`--vae_batch_size` および `--no_half_vae` はそのまま EfficientNetEncoder に適用されます（mixed precision に `bf16` 指定時は `--no_half_vae` は不要のようです）。
+
+latents および Text Encoder 出力キャッシュのためのオプションはそのまま使用できますが、EfficientNetEncoder は VAE よりもかなり軽量のため、メモリが特に厳しい場合以外はキャッシュを使用する必要はないかもしれません。
+
+メモリ消費を抑えるための `--gradient_checkpointing` 、`--full_bf16`、`--full_fp16`（未テスト）はそのまま使用できます。
+
+サンプル画像生成時の Scale には 4 程度が適しているようです。
+
+公式の設定では学習に `bf16` を用いているため、`fp16` での学習は不安定かもしれません。
+
+Text Encoder 学習のコードも書いてありますが、未テストです。
+
+### コマンドラインのサンプル
+
+[Command-line-sample](#command-line-sample)を参照してください。
+
+
+###  fine tuning方式のデータセットについて
+
+SD/SDXL 向けの latents キャッシュファイル（拡張子 `*.npz`）が存在するとそれを読み込んでしまい学習時にエラーになります。あらかじめ他の場所に退避しておいてください。
+
+その後、`finetune/prepare_buckets_latents.py` をオプション `--stable_cascade` を指定して実行すると、Stable Cascade 向けの latents キャッシュファイル（接尾辞 `_sc_latents.npz` が付きます）が作成されます。
+
+---  
+
 __SDXL is now supported. The sdxl branch has been merged into the main branch. If you update the repository, please follow the upgrade instructions. Also, the version of accelerate has been updated, so please run accelerate config again.__ The documentation for SDXL training is [here](./README.md#sdxl-training).
 
 This repository contains training, generation and utility scripts for Stable Diffusion.
@@ -248,6 +344,45 @@ ControlNet-LLLite, a novel method for ControlNet with SDXL, is added. See [docum
 
 
 ## Change History
+
+### Working in progress
+
+- The log output has been improved. PR [#905](https://github.com/kohya-ss/sd-scripts/pull/905) Thanks to shirayu!
+  - The log is formatted by default. The `rich` library is required. Please see [Upgrade](#upgrade) and update the library.
+  - If `rich` is not installed, the log output will be the same as before.
+  - The following options are available in each training script:
+  - `--console_log_simple` option can be used to switch to the previous log output.
+  - `--console_log_level` option can be used to specify the log level. The default is `INFO`.
+  - `--console_log_file` option can be used to output the log to a file. The default is `None` (output to the console).
+- The sample image generation during multi-GPU training is now done with multiple GPUs. PR [#1061](https://github.com/kohya-ss/sd-scripts/pull/1061) Thanks to DKnight54!
+- The support for mps devices is improved. PR [#1054](https://github.com/kohya-ss/sd-scripts/pull/1054) Thanks to akx! If mps device exists instead of CUDA, the mps device is used automatically.
+- An option `--highvram` to disable the optimization for environments with little VRAM is added to the training scripts. If you specify it when there is enough VRAM, the operation will be faster.
+  - Currently, only the cache part of latents is optimized.
+- The IPEX support is improved. PR [#1086](https://github.com/kohya-ss/sd-scripts/pull/1086) Thanks to Disty0!
+- Fixed a bug that `svd_merge_lora.py` crashes in some cases. PR [#1087](https://github.com/kohya-ss/sd-scripts/pull/1087) Thanks to mgz-dev!
+- The common image generation script `gen_img.py` for SD 1/2 and SDXL is added. The basic functions are the same as the scripts for SD 1/2 and SDXL, but some new features are added.
+  - External scripts to generate prompts can be supported. It can be called with `--from_module` option. (The documentation will be added later)
+  - The normalization method after prompt weighting can be specified with `--emb_normalize_mode` option. `original` is the original method, `abs` is the normalization with the average of the absolute values, `none` is no normalization.
+- Gradual Latent Hires fix is added to each generation script. See [here](./docs/gen_img_README-ja.md#about-gradual-latent) for details.
+
+- ログ出力が改善されました。 PR [#905](https://github.com/kohya-ss/sd-scripts/pull/905) shirayu 氏に感謝します。
+  - デフォルトでログが成形されます。`rich` ライブラリが必要なため、[Upgrade](#upgrade) を参照し更新をお願いします。
+  - `rich` がインストールされていない場合は、従来のログ出力になります。
+  - 各学習スクリプトでは以下のオプションが有効です。
+  - `--console_log_simple` オプションで従来のログ出力に切り替えられます。
+  - `--console_log_level` でログレベルを指定できます。デフォルトは `INFO` です。
+  - `--console_log_file` でログファイルを出力できます。デフォルトは `None`（コンソールに出力） です。
+- 複数 GPU 学習時に学習中のサンプル画像生成を複数 GPU で行うようになりました。 PR [#1061](https://github.com/kohya-ss/sd-scripts/pull/1061) DKnight54 氏に感謝します。
+- mps デバイスのサポートが改善されました。 PR [#1054](https://github.com/kohya-ss/sd-scripts/pull/1054) akx 氏に感謝します。CUDA ではなく mps が存在する場合には自動的に mps デバイスを使用します。
+- 学習スクリプトに VRAMが少ない環境向け最適化を無効にするオプション `--highvram` を追加しました。VRAM に余裕がある場合に指定すると動作が高速化されます。
+  - 現在は latents のキャッシュ部分のみ高速化されます。
+- IPEX サポートが改善されました。 PR [#1086](https://github.com/kohya-ss/sd-scripts/pull/1086) Disty0 氏に感謝します。
+- `svd_merge_lora.py` が場合によってエラーになる不具合が修正されました。 PR [#1087](https://github.com/kohya-ss/sd-scripts/pull/1087) mgz-dev 氏に感謝します。
+- SD 1/2 および SDXL 共通の生成スクリプト `gen_img.py` を追加しました。基本的な機能は SD 1/2、SDXL 向けスクリプトと同じですが、いくつかの新機能が追加されています。
+  - プロンプトを動的に生成する外部スクリプトをサポートしました。 `--from_module` で呼び出せます。（ドキュメントはのちほど追加します）
+  - プロンプト重みづけ後の正規化方法を `--emb_normalize_mode` で指定できます。`original` は元の方法、`abs` は絶対値の平均値で正規化、`none` は正規化を行いません。
+- Gradual Latent Hires fix を各生成スクリプトに追加しました。詳細は [こちら](./docs/gen_img_README-ja.md#about-gradual-latent)。
+
 
 ### Jan 27, 2024 / 2024/1/27: v0.8.3
 
