@@ -2,7 +2,15 @@
 
 This is an experimental feature. There may be bugs.
 
-__Feb 20, 2024 Update:__ There was a problem with the preprocessing of the EffcientNetEncoder, and the latents became invalid (the saturation of the training results decreases). If you have cached `_sc_latents.npz` files with `--cache_latents_to_disk`, please delete them before training.
+__Feb 25, 2024 Update:__  Fixed a bug that the LoRA weights trained can be loaded in ComfyUI. If you still have a problem, please let me know.
+
+__Feb 25, 2024 Update:__ Fixed a bug that Stage C training with mixed precision behaves the same as `--full_bf16` (fp16) regardless of `--full_bf16` (fp16) specified. 
+
+This is because the Stage C weights were loaded in bf16/fp16. With this fix, the memory usage without `--full_bf16` (fp16) specified will increase, so you may need to specify `--full_bf16` (fp16) as needed.
+
+__Feb 22, 2024 Update:__ Fixed a bug that LoRA is not applied to some modules (to_q/k/v and to_out) in Attention. Also, the model structure of Stage C has been changed, and you can choose xformers and SDPA (SDPA was used before). Please specify `--sdpa` or `--xformers` option.
+
+__Feb 20, 2024 Update:__ There was a problem with the preprocessing of the EfficientNetEncoder, and the latents became invalid (the saturation of the training results decreases). If you have cached `_sc_latents.npz` files with `--cache_latents_to_disk`, please delete them before training.
 
 ## Usage
 
@@ -78,7 +86,15 @@ The following prompt options are available.
 
 実験的機能です。不具合があるかもしれません。
 
-__2024/2/20 追記:__ EffcientNetEncoder の前処理に不具合があり、latents が不正になっていました（学習結果の彩度が低下する現象が起きます）。`--cache_latents_to_disk` でキャッシュした `_sc_latents.npz` がある場合、いったん削除してから学習してください。
+__2024/2/25 追記:__ 学習される LoRA の重みが ComfyUI で読み込めるよう修正しました。依然として不具合がある場合にはご連絡ください。
+
+__2024/2/25 追記:__ Mixed precision 時のStage C の学習が、 `--full_bf16` (fp16) の指定に関わらず `--full_bf16` (fp16) 指定時と同じ動作となる（と思われる）不具合を修正しました。
+
+Stage C の重みを bf16/fp16 で読み込んでいたためです。この修正により `--full_bf16` (fp16) 未指定時のメモリ使用量が増えますので、必要に応じて `--full_bf16` (fp16) を指定してください。
+
+__2024/2/22 追記:__ LoRA が一部のモジュール（Attention の to_q/k/v および to_out）に適用されない不具合を修正しました。また Stage C のモデル構造を変更し xformers と SDPA を選べるようになりました（今までは SDPA が使用されていました）。`--sdpa` または `--xformers` オプションを指定してください。
+
+__2024/2/20 追記:__ EfficientNetEncoder の前処理に不具合があり、latents が不正になっていました（学習結果の彩度が低下する現象が起きます）。`--cache_latents_to_disk` でキャッシュした `_sc_latents.npz` がある場合、いったん削除してから学習してください。
 
 ## 使い方
 
@@ -404,7 +420,7 @@ ControlNet-LLLite, a novel method for ControlNet with SDXL, is added. See [docum
 
 ## Change History
 
-### Working in progress
+### Feb 24, 2024 / 2024/2/24: v0.8.4
 
 - The log output has been improved. PR [#905](https://github.com/kohya-ss/sd-scripts/pull/905) Thanks to shirayu!
   - The log is formatted by default. The `rich` library is required. Please see [Upgrade](#upgrade) and update the library.
@@ -415,10 +431,12 @@ ControlNet-LLLite, a novel method for ControlNet with SDXL, is added. See [docum
   - `--console_log_file` option can be used to output the log to a file. The default is `None` (output to the console).
 - The sample image generation during multi-GPU training is now done with multiple GPUs. PR [#1061](https://github.com/kohya-ss/sd-scripts/pull/1061) Thanks to DKnight54!
 - The support for mps devices is improved. PR [#1054](https://github.com/kohya-ss/sd-scripts/pull/1054) Thanks to akx! If mps device exists instead of CUDA, the mps device is used automatically.
+- The `--new_conv_rank` option to specify the new rank of Conv2d is added to `networks/resize_lora.py`. PR [#1102](https://github.com/kohya-ss/sd-scripts/pull/1102) Thanks to mgz-dev!
 - An option `--highvram` to disable the optimization for environments with little VRAM is added to the training scripts. If you specify it when there is enough VRAM, the operation will be faster.
   - Currently, only the cache part of latents is optimized.
 - The IPEX support is improved. PR [#1086](https://github.com/kohya-ss/sd-scripts/pull/1086) Thanks to Disty0!
 - Fixed a bug that `svd_merge_lora.py` crashes in some cases. PR [#1087](https://github.com/kohya-ss/sd-scripts/pull/1087) Thanks to mgz-dev!
+- DyLoRA is fixed to work with SDXL. PR [#1126](https://github.com/kohya-ss/sd-scripts/pull/1126) Thanks to tamlog06!
 - The common image generation script `gen_img.py` for SD 1/2 and SDXL is added. The basic functions are the same as the scripts for SD 1/2 and SDXL, but some new features are added.
   - External scripts to generate prompts can be supported. It can be called with `--from_module` option. (The documentation will be added later)
   - The normalization method after prompt weighting can be specified with `--emb_normalize_mode` option. `original` is the original method, `abs` is the normalization with the average of the absolute values, `none` is no normalization.
@@ -433,10 +451,12 @@ ControlNet-LLLite, a novel method for ControlNet with SDXL, is added. See [docum
   - `--console_log_file` でログファイルを出力できます。デフォルトは `None`（コンソールに出力） です。
 - 複数 GPU 学習時に学習中のサンプル画像生成を複数 GPU で行うようになりました。 PR [#1061](https://github.com/kohya-ss/sd-scripts/pull/1061) DKnight54 氏に感謝します。
 - mps デバイスのサポートが改善されました。 PR [#1054](https://github.com/kohya-ss/sd-scripts/pull/1054) akx 氏に感謝します。CUDA ではなく mps が存在する場合には自動的に mps デバイスを使用します。
+- `networks/resize_lora.py` に Conv2d の新しいランクを指定するオプション `--new_conv_rank` が追加されました。 PR [#1102](https://github.com/kohya-ss/sd-scripts/pull/1102) mgz-dev 氏に感謝します。
 - 学習スクリプトに VRAMが少ない環境向け最適化を無効にするオプション `--highvram` を追加しました。VRAM に余裕がある場合に指定すると動作が高速化されます。
   - 現在は latents のキャッシュ部分のみ高速化されます。
 - IPEX サポートが改善されました。 PR [#1086](https://github.com/kohya-ss/sd-scripts/pull/1086) Disty0 氏に感謝します。
 - `svd_merge_lora.py` が場合によってエラーになる不具合が修正されました。 PR [#1087](https://github.com/kohya-ss/sd-scripts/pull/1087) mgz-dev 氏に感謝します。
+- DyLoRA が SDXL で動くよう修正されました。PR [#1126](https://github.com/kohya-ss/sd-scripts/pull/1126) tamlog06 氏に感謝します。
 - SD 1/2 および SDXL 共通の生成スクリプト `gen_img.py` を追加しました。基本的な機能は SD 1/2、SDXL 向けスクリプトと同じですが、いくつかの新機能が追加されています。
   - プロンプトを動的に生成する外部スクリプトをサポートしました。 `--from_module` で呼び出せます。（ドキュメントはのちほど追加します）
   - プロンプト重みづけ後の正規化方法を `--emb_normalize_mode` で指定できます。`original` は元の方法、`abs` は絶対値の平均値で正規化、`none` は正規化を行いません。
@@ -511,45 +531,6 @@ network_multiplier = -1.0
 
 ... subset settings ...
 ```
-
-
-### Jan 17, 2024 / 2024/1/17: v0.8.1
-
-- Fixed a bug that the VRAM usage without Text Encoder training is larger than before in training scripts for LoRA etc (`train_network.py`, `sdxl_train_network.py`).
-  - Text Encoders were not moved to CPU.
-- Fixed typos. Thanks to akx! [PR #1053](https://github.com/kohya-ss/sd-scripts/pull/1053)
-
-- LoRA 等の学習スクリプト（`train_network.py`、`sdxl_train_network.py`）で、Text Encoder を学習しない場合の VRAM 使用量が以前に比べて大きくなっていた不具合を修正しました。 
-  - Text Encoder が GPU に保持されたままになっていました。
-- 誤字が修正されました。 [PR #1053](https://github.com/kohya-ss/sd-scripts/pull/1053) akx 氏に感謝します。
-
-### Jan 15, 2024 / 2024/1/15: v0.8.0
-
-- Diffusers, Accelerate, Transformers and other related libraries have been updated. Please update the libraries with [Upgrade](#upgrade).
-  - Some model files (Text Encoder without position_id) based on the latest Transformers can be loaded.
-- `torch.compile` is supported (experimental). PR [#1024](https://github.com/kohya-ss/sd-scripts/pull/1024) Thanks to p1atdev!
-  - This feature works only on Linux or WSL.
-  - Please specify `--torch_compile` option in each training script.
-  - You can select the backend with `--dynamo_backend` option. The default is `"inductor"`. `inductor` or `eager` seems to work.
-  - Please use `--sdpa` option instead of `--xformers` option.
-  - PyTorch 2.1 or later is recommended.
-  - Please see [PR](https://github.com/kohya-ss/sd-scripts/pull/1024) for details.
-- The session name for wandb can be specified with `--wandb_run_name` option. PR [#1032](https://github.com/kohya-ss/sd-scripts/pull/1032) Thanks to hopl1t!
-- IPEX library is updated. PR [#1030](https://github.com/kohya-ss/sd-scripts/pull/1030) Thanks to Disty0!
-- Fixed a bug that Diffusers format model cannot be saved.
-
-- Diffusers、Accelerate、Transformers 等の関連ライブラリを更新しました。[Upgrade](#upgrade) を参照し更新をお願いします。
-  - 最新の Transformers を前提とした一部のモデルファイル（Text Encoder が position_id を持たないもの）が読み込めるようになりました。
-- `torch.compile` がサポートされしました（実験的）。 PR [#1024](https://github.com/kohya-ss/sd-scripts/pull/1024) p1atdev 氏に感謝します。
-  - Linux または WSL でのみ動作します。
-  - 各学習スクリプトで `--torch_compile` オプションを指定してください。
-  - `--dynamo_backend` オプションで使用される backend を選択できます。デフォルトは `"inductor"` です。 `inductor` または `eager` が動作するようです。
-  - `--xformers` オプションとは互換性がありません。 代わりに `--sdpa` オプションを使用してください。
-  - PyTorch 2.1以降を推奨します。
-  - 詳細は [PR](https://github.com/kohya-ss/sd-scripts/pull/1024) をご覧ください。
-- wandb 保存時のセッション名が各学習スクリプトの `--wandb_run_name` オプションで指定できるようになりました。 PR [#1032](https://github.com/kohya-ss/sd-scripts/pull/1032) hopl1t 氏に感謝します。
-- IPEX ライブラリが更新されました。[PR #1030](https://github.com/kohya-ss/sd-scripts/pull/1030) Disty0 氏に感謝します。
-- Diffusers 形式でのモデル保存ができなくなっていた不具合を修正しました。
 
 
 Please read [Releases](https://github.com/kohya-ss/sd-scripts/releases) for recent updates.
