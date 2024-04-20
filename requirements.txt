@@ -32,6 +32,7 @@ onnx==1.15.0
 # for cuda 12.1(default 11.8)
 --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
 onnxruntime-gpu
+omegaconf
 
 # this is for onnx: 
 protobuf==3.20.3
