@@ -5,7 +5,7 @@ import os
 import random
 import time
 from multiprocessing import Value
-from omegaconf import OmegaConf
+from types import SimpleNamespace
 import toml
 
 from tqdm import tqdm
@@ -148,10 +148,8 @@ def train(args):
             "in_channels": 4,
             "layers_per_block": 2,
             "mid_block_scale_factor": 1,
-            "mid_block_type": "UNetMidBlock2DCrossAttn",
             "norm_eps": 1e-05,
             "norm_num_groups": 32,
-            "num_attention_heads": [5, 10, 20, 20],
             "num_class_embeds": None,
             "only_cross_attention": False,
             "out_channels": 4,
@@ -181,10 +179,8 @@ def train(args):
             "in_channels": 4,
             "layers_per_block": 2,
             "mid_block_scale_factor": 1,
-            "mid_block_type": "UNetMidBlock2DCrossAttn",
             "norm_eps": 1e-05,
             "norm_num_groups": 32,
-            "num_attention_heads": 8,
             "out_channels": 4,
             "sample_size": 64,
             "up_block_types": ["UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D"],
@@ -197,7 +193,7 @@ def train(args):
             "resnet_time_scale_shift": "default",
             "projection_class_embeddings_input_dim": None,
         }
-    unet.config = OmegaConf.create(unet.config)
+    unet.config = SimpleNamespace(**unet.config)
 
     controlnet = ControlNetModel.from_unet(unet)
 
