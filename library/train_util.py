@@ -3897,9 +3897,10 @@ def get_optimizer(args, trainable_params):
     optimizer_type = optimizer_type.lower()
 
     if args.fused_backward_pass:
+        accepted_optimizers=["Adafactor","AdamW"]
         assert (
-            optimizer_type == "Adafactor".lower()
-        ), "fused_backward_pass currently only works with optimizer_type Adafactor / fused_backward_passは現在optimizer_type Adafactorでのみ機能します"
+            optimizer_type in [optimizer.lower() for optimizer in accepted_optimizers]
+        ), f"fused_backward_pass currently only works with optimizer_type in {accepted_optimizers} / fused_backward_passは現在optimizer_type {accepted_optimizers}でのみ機能します"
         assert (
             args.gradient_accumulation_steps == 1
         ), "fused_backward_pass does not work with gradient_accumulation_steps > 1 / fused_backward_passはgradient_accumulation_steps>1では機能しません"

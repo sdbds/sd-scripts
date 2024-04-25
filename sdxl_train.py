@@ -431,8 +431,8 @@ def train(args):
         optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
 
     if args.fused_backward_pass:
-        import library.adafactor_fused
-        library.adafactor_fused.patch_adafactor_fused(optimizer)
+        import library.optimizer_fused
+        library.optimizer_fused.patch_optimizer_fused(optimizer, args.optimizer_type)
         for param_group in optimizer.param_groups:
             for parameter in param_group["params"]:
                 if parameter.requires_grad:
