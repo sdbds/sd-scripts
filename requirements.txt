@@ -24,7 +24,7 @@ imagesize==1.4.1
 # timm==0.6.12
 # fairscale==0.4.13
 # for WD14 captioning (tensorflow)
-# tensorflow==2.10.1
+tensorflow==2.14.1
 # for WD14 captioning (onnx)
 onnx==1.15.0
 # onnxruntime-gpu==1.17.1
