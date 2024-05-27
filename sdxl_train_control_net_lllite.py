@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 import torch
 from library.device_utils import init_ipex, clean_memory_on_device
+
 init_ipex()
 
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -361,7 +362,7 @@ def train(args):
         if args.log_tracker_config is not None:
             init_kwargs = toml.load(args.log_tracker_config)
         accelerator.init_trackers(
-            "lllite_control_net_train" if args.log_tracker_name is None else args.log_tracker_name, init_kwargs=init_kwargs
+            "lllite_control_net_train" if args.log_tracker_name is None else args.log_tracker_name, config=train_util.get_sanitized_config_or_none(args), init_kwargs=init_kwargs
         )
 
     loss_recorder = train_util.LossRecorder()
@@ -449,7 +450,9 @@ def train(args):
 
                 # Sample noise, sample a random timestep for each image, and add noise to the latents,
                 # with noise offset and/or multires noise if specified
-                noise, noisy_latents, timesteps, huber_c = train_util.get_noise_noisy_latents_and_timesteps(args, noise_scheduler, latents)
+                noise, noisy_latents, timesteps, huber_c = train_util.get_noise_noisy_latents_and_timesteps(
+                    args, noise_scheduler, latents
+                )
 
                 noisy_latents = noisy_latents.to(weight_dtype)  # TODO check why noisy_latents is not weight_dtype
 
@@ -468,7 +471,9 @@ def train(args):
                 else:
                     target = noise
 
-                loss = train_util.conditional_loss(noise_pred.float(), target.float(), reduction="none", loss_type=args.loss_type, huber_c=huber_c)
+                loss = train_util.conditional_loss(
+                    noise_pred.float(), target.float(), reduction="none", loss_type=args.loss_type, huber_c=huber_c
+                )
                 loss = loss.mean([1, 2, 3])
 
                 loss_weights = batch["loss_weights"]  # 各sampleごとのweight

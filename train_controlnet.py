@@ -5,7 +5,8 @@ import os
 import random
 import time
 from multiprocessing import Value
-from omegaconf import OmegaConf
+
+# from omegaconf import OmegaConf
 import toml
 
 from tqdm import tqdm
@@ -13,6 +14,7 @@ from tqdm import tqdm
 import torch
 from library import deepspeed_utils
 from library.device_utils import init_ipex, clean_memory_on_device
+
 init_ipex()
 
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -197,7 +199,23 @@ def train(args):
             "resnet_time_scale_shift": "default",
             "projection_class_embeddings_input_dim": None,
         }
-    unet.config = OmegaConf.create(unet.config)
+    # unet.config = OmegaConf.create(unet.config)
+
+    # make unet.config iterable and accessible by attribute
+    class CustomConfig:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+        def __getattr__(self, name):
+            if name in self.__dict__:
+                return self.__dict__[name]
+            else:
+                raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+
+        def __contains__(self, name):
+            return name in self.__dict__
+
+    unet.config = CustomConfig(**unet.config)
 
     controlnet = ControlNetModel.from_unet(unet)
 
@@ -230,7 +248,7 @@ def train(args):
             )
         vae.to("cpu")
         clean_memory_on_device(accelerator.device)
-        
+
         accelerator.wait_for_everyone()
 
     if args.gradient_checkpointing:
@@ -239,7 +257,7 @@ def train(args):
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
 
-    trainable_params = controlnet.parameters()
+    trainable_params = list(controlnet.parameters())
 
     _, _, optimizer = train_util.get_optimizer(args, trainable_params)
 
@@ -280,14 +298,9 @@ def train(args):
         controlnet.to(weight_dtype)
 
     # acceleratorがなんかよろしくやってくれるらしい
-    if args.optimizer_type.lower().endswith("schedulefree"):
-        controlnet, optimizer, train_dataloader = accelerator.prepare(
-            controlnet, optimizer, train_dataloader
-        )
-    else:
-        controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-            controlnet, optimizer, train_dataloader, lr_scheduler
-        )
+    controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        controlnet, optimizer, train_dataloader, lr_scheduler
+    )
 
     unet.requires_grad_(False)
     text_encoder.requires_grad_(False)
@@ -353,7 +366,9 @@ def train(args):
         if args.log_tracker_config is not None:
             init_kwargs = toml.load(args.log_tracker_config)
         accelerator.init_trackers(
-            "controlnet_train" if args.log_tracker_name is None else args.log_tracker_name, init_kwargs=init_kwargs
+            "controlnet_train" if args.log_tracker_name is None else args.log_tracker_name,
+            config=train_util.get_sanitized_config_or_none(args),
+            init_kwargs=init_kwargs,
         )
 
     loss_recorder = train_util.LossRecorder()
@@ -402,8 +417,6 @@ def train(args):
         current_epoch.value = epoch + 1
 
         for step, batch in enumerate(train_dataloader):
-            if (args.optimizer_type.lower().endswith("schedulefree")):
-                optimizer.train()
             current_step.value = global_step
             with accelerator.accumulate(controlnet):
                 with torch.no_grad():
@@ -431,7 +444,9 @@ def train(args):
                     )
 
                 # Sample a random timestep for each image
-                timesteps, huber_c = train_util.get_timesteps_and_huber_c(args, 0, noise_scheduler.config.num_train_timesteps, noise_scheduler, b_size, latents.device)
+                timesteps, huber_c = train_util.get_timesteps_and_huber_c(
+                    args, 0, noise_scheduler.config.num_train_timesteps, noise_scheduler, b_size, latents.device
+                )
 
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
@@ -463,7 +478,9 @@ def train(args):
                 else:
                     target = noise
 
-                loss = train_util.conditional_loss(noise_pred.float(), target.float(), reduction="none", loss_type=args.loss_type, huber_c=huber_c)
+                loss = train_util.conditional_loss(
+                    noise_pred.float(), target.float(), reduction="none", loss_type=args.loss_type, huber_c=huber_c
+                )
                 loss = loss.mean([1, 2, 3])
 
                 loss_weights = batch["loss_weights"]  # 各sampleごとのweight
@@ -482,9 +499,6 @@ def train(args):
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
-
-            if (args.optimizer_type.lower().endswith("schedulefree")):
-                optimizer.eval()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:

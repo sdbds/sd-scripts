@@ -17,7 +17,6 @@ init_ipex()
 from torchvision import transforms
 
 import library.model_util as model_util
-import library.stable_cascade_utils as sc_utils
 import library.train_util as train_util
 from library.utils import setup_logging
 
@@ -46,7 +45,7 @@ def collate_fn_remove_corrupted(batch):
     return batch
 
 
-def get_npz_filename(data_dir, image_key, is_full_path, recursive, stable_cascade):
+def get_npz_filename(data_dir, image_key, is_full_path, recursive):
     if is_full_path:
         base_name = os.path.splitext(os.path.basename(image_key))[0]
         relative_path = os.path.relpath(os.path.dirname(image_key), data_dir)
@@ -54,11 +53,10 @@ def get_npz_filename(data_dir, image_key, is_full_path, recursive, stable_cascad
         base_name = image_key
         relative_path = ""
 
-    ext = ".npz" if not stable_cascade else train_util.STABLE_CASCADE_LATENTS_CACHE_SUFFIX
     if recursive and relative_path:
-        return os.path.join(data_dir, relative_path, base_name) + ext
+        return os.path.join(data_dir, relative_path, base_name) + ".npz"
     else:
-        return os.path.join(data_dir, base_name) + ext
+        return os.path.join(data_dir, base_name) + ".npz"
 
 
 def main(args):
@@ -88,12 +86,7 @@ def main(args):
     elif args.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    if not args.stable_cascade:
-        vae = model_util.load_vae(args.model_name_or_path, weight_dtype)
-        divisor = 8
-    else:
-        vae = sc_utils.load_effnet(args.model_name_or_path, DEVICE)
-        divisor = 32
+    vae = model_util.load_vae(args.model_name_or_path, weight_dtype)
     vae.eval()
     vae.to(DEVICE, dtype=weight_dtype)
 
@@ -119,7 +112,7 @@ def main(args):
     def process_batch(is_last):
         for bucket in bucket_manager.buckets:
             if (is_last and len(bucket) > 0) or len(bucket) >= args.batch_size:
-                train_util.cache_batch_latents(vae, True, bucket, args.flip_aug, False)
+                train_util.cache_batch_latents(vae, True, bucket, args.flip_aug, args.alpha_mask, False)
                 bucket.clear()
 
     # 読み込みの高速化のためにDataLoaderを使うオプション
@@ -166,10 +159,6 @@ def main(args):
         # メタデータに記録する解像度はlatent単位とするので、8単位で切り捨て
         metadata[image_key]["train_resolution"] = (reso[0] - reso[0] % 8, reso[1] - reso[1] % 8)
 
-        # 追加情報を記録
-        metadata[image_key]["original_size"] = (image.width, image.height)
-        metadata[image_key]["train_resized_size"] = resized_size
-
         if not args.bucket_no_upscale:
             # upscaleを行わないときには、resize後のサイズは、bucketのサイズと、縦横どちらかが同じであることを確認する
             assert (
@@ -184,9 +173,9 @@ def main(args):
         ), f"internal error resized size is small: {resized_size}, {reso}"
 
         # 既に存在するファイルがあればshape等を確認して同じならskipする
-        npz_file_name = get_npz_filename(args.train_data_dir, image_key, args.full_path, args.recursive, args.stable_cascade)
+        npz_file_name = get_npz_filename(args.train_data_dir, image_key, args.full_path, args.recursive)
         if args.skip_existing:
-            if train_util.is_disk_cached_latents_is_expected(reso, npz_file_name, args.flip_aug, divisor):
+            if train_util.is_disk_cached_latents_is_expected(reso, npz_file_name, args.flip_aug):
                 continue
 
         # バッチへ追加
@@ -224,11 +213,6 @@ def setup_parser() -> argparse.ArgumentParser:
     parser.add_argument("in_json", type=str, help="metadata file to input / 読み込むメタデータファイル")
     parser.add_argument("out_json", type=str, help="metadata file to output / メタデータファイル書き出し先")
     parser.add_argument("model_name_or_path", type=str, help="model name or path to encode latents / latentを取得するためのモデル")
-    parser.add_argument(
-        "--stable_cascade",
-        action="store_true",
-        help="prepare EffNet latents for stable cascade / stable cascade用のEffNetのlatentsを準備する",
-    )
     parser.add_argument(
         "--v2", action="store_true", help="not used (for backward compatibility) / 使用されません（互換性のため残してあります）"
     )
@@ -274,6 +258,12 @@ def setup_parser() -> argparse.ArgumentParser:
         "--flip_aug",
         action="store_true",
         help="flip augmentation, save latents for flipped images / 左右反転した画像もlatentを取得、保存する",
+    )
+    parser.add_argument(
+        "--alpha_mask",
+        type=str,
+        default="",
+        help="save alpha mask for images for loss calculation / 損失計算用に画像のアルファマスクを保存する",
     )
     parser.add_argument(
         "--skip_existing",
