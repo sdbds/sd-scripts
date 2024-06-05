@@ -130,6 +130,11 @@ def add_custom_train_arguments(parser: argparse.ArgumentParser, support_weighted
         action="store_true",
         help="debiased estimation loss / debiased estimation loss",
     )
+    parser.add_argument(
+        "--mixed_blue_and_white_noise",
+        action="store_true",
+        help="mixed_blue_and_white_noise / mixed blue and white noise",
+    )
     if support_weighted_captions:
         parser.add_argument(
             "--weighted_captions",
@@ -496,6 +501,40 @@ def apply_masked_loss(loss, batch):
     mask_image = torch.nn.functional.interpolate(mask_image, size=loss.shape[2:], mode="area")
     loss = loss * mask_image
     return loss
+
+
+def get_blue_noise(latents):
+    dimension = 64
+    b, c, h, w = latents.shape
+    cov_mat_L = torch.eye(dimension, device=latents.device)
+
+    noise = torch.randn(b, c, h, w, device=latents.device).to(torch.complex64)
+    cov_mat_L = cov_mat_L.to(latents.device)
+
+    # Perform 2D Fourier transform
+    f_transform = torch.fft.fftn(noise, dim=(-2, -1))
+    
+    # Shift zero frequency component to the center
+    f_transform = torch.fft.fftshift(f_transform, dim=(-2, -1))
+    
+    # Apply the covariance matrix
+    f_transform = f_transform.view(b * c, h, w)
+    f_transform = torch.einsum('bxy,xy->bxy', f_transform, cov_mat_L).view(b, c, h, w)
+    
+    # Inverse shift and inverse Fourier transform
+    f_transform = torch.fft.ifftshift(f_transform, dim=(-2, -1))
+    noise_bn = torch.fft.ifftn(f_transform, dim=(-2, -1)).real
+    
+    return noise_bn
+
+
+def mixed_blue_and_white_noise(noise_scheduler, latents, timesteps):
+
+    alpha_t = timesteps / noise_scheduler.config.num_train_timesteps
+    noise_bn = get_blue_noise(latents)
+    noise_wn = torch.randn_like(latents, device=latents.device)
+    noise = noise_bn * (1 - alpha_t.view(-1, 1, 1, 1)) + noise_wn * alpha_t.view(-1, 1, 1, 1)
+    return noise
 
 
 """

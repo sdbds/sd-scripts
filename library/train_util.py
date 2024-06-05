@@ -5060,8 +5060,18 @@ def get_timesteps_and_huber_c(args, min_timestep, max_timestep, noise_scheduler,
 
 
 def get_noise_noisy_latents_and_timesteps(args, noise_scheduler, latents):
+    # Sample a random timestep for each image
+    b_size = latents.shape[0]
+    min_timestep = 0 if args.min_timestep is None else args.min_timestep
+    max_timestep = noise_scheduler.config.num_train_timesteps if args.max_timestep is None else args.max_timestep
+
+    timesteps, huber_c = get_timesteps_and_huber_c(args, min_timestep, max_timestep, noise_scheduler, b_size, latents.device)
+
     # Sample noise that we'll add to the latents
-    noise = torch.randn_like(latents, device=latents.device)
+    if args.mixed_blue_and_white_noise:
+        noise = custom_train_functions.mixed_blue_and_white_noise(noise_scheduler, latents, timesteps)
+    else:
+        noise = torch.randn_like(latents, device=latents.device)
     if args.noise_offset:
         if args.noise_offset_random_strength:
             noise_offset = torch.rand(1, device=latents.device) * args.noise_offset
@@ -5071,14 +5081,7 @@ def get_noise_noisy_latents_and_timesteps(args, noise_scheduler, latents):
     if args.multires_noise_iterations:
         noise = custom_train_functions.pyramid_noise_like(
             noise, latents.device, args.multires_noise_iterations, args.multires_noise_discount
-        )
-
-    # Sample a random timestep for each image
-    b_size = latents.shape[0]
-    min_timestep = 0 if args.min_timestep is None else args.min_timestep
-    max_timestep = noise_scheduler.config.num_train_timesteps if args.max_timestep is None else args.max_timestep
-
-    timesteps, huber_c = get_timesteps_and_huber_c(args, min_timestep, max_timestep, noise_scheduler, b_size, latents.device)
+    )
 
     # Add noise to the latents according to the noise magnitude at each timestep
     # (this is the forward diffusion process)
