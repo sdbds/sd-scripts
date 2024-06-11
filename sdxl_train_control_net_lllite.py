@@ -292,6 +292,9 @@ def train(args):
     else:
         unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(unet, optimizer, train_dataloader, lr_scheduler)
 
+    if isinstance(unet, DDP):
+        unet._set_static_graph() # avoid error for multiple use of the parameter
+
     if args.gradient_checkpointing:
         if (args.optimizer_type.lower().endswith("schedulefree")):
             optimizer.train()
