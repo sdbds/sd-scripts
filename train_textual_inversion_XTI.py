@@ -34,6 +34,8 @@ from library.custom_train_functions import (
     scale_v_prediction_loss_like_noise_prediction,
     apply_debiased_estimation,
     apply_masked_loss,
+    gradfilter_ema,
+    gradfilter_ma,
 )
 import library.original_unet as original_unet
 from XTI_hijack import unet_forward_XTI, downblock_forward_XTI, upblock_forward_XTI
@@ -427,6 +429,9 @@ def train(args):
             logger.info(f"removing old checkpoint: {old_ckpt_file}")
             os.remove(old_ckpt_file)
 
+    if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
+        grads = None
+
     # training loop
     for epoch in range(num_train_epochs):
         logger.info("")
@@ -494,6 +499,23 @@ def train(args):
                 if accelerator.sync_gradients and args.max_grad_norm != 0.0:
                     params_to_clip = text_encoder.get_input_embeddings().parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+
+                if args.gradfilter_ema_alpha:
+                    grads = gradfilter_ema(
+                        m=text_encoder,
+                        grads=grads,
+                        alpha=args.gradfilter_ema_alpha,
+                        lamb=args.gradfilter_ema_lamb,
+                    )
+                elif args.gradfilter_ma_window_size:
+                    grads = gradfilter_ma(
+                        m=text_encoder,
+                        grads=grads,
+                        window_size=args.gradfilter_ma_window_size,
+                        lamb=args.gradfilter_ma_lamb,
+                        filter_type=args.gradfilter_ma_filter_type,
+                        warmup=False if args.gradfilter_ma_warmup_false else True,
+                    )
 
                 optimizer.step()
                 lr_scheduler.step()

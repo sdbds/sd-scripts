@@ -37,6 +37,8 @@ from library.custom_train_functions import (
     add_v_prediction_like_loss,
     apply_debiased_estimation,
     apply_masked_loss,
+    gradfilter_ema,
+    gradfilter_ma,
 )
 from library.utils import setup_logging, add_logging_arguments
 
@@ -887,6 +889,9 @@ class NetworkTrainer:
                 initial_step -= len(train_dataloader)
             global_step = initial_step
 
+        if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
+            grads = None
+
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
             current_epoch.value = epoch + 1
@@ -1008,6 +1013,23 @@ class NetworkTrainer:
                         if args.max_grad_norm != 0.0:
                             params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
                             accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+
+                    if args.gradfilter_ema_alpha:
+                        grads = gradfilter_ema(
+                            m=network,
+                            grads=grads,
+                            alpha=args.gradfilter_ema_alpha,
+                            lamb=args.gradfilter_ema_lamb,
+                        )
+                    elif args.gradfilter_ma_window_size:
+                        grads = gradfilter_ma(
+                            m=network,
+                            grads=grads,
+                            window_size=args.gradfilter_ma_window_size,
+                            lamb=args.gradfilter_ma_lamb,
+                            filter_type=args.gradfilter_ma_filter_type,
+                            warmup=False if args.gradfilter_ma_warmup_false else True,
+                        )
 
                     optimizer.step()
                     lr_scheduler.step()

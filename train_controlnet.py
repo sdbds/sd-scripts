@@ -35,6 +35,8 @@ from library.custom_train_functions import (
     apply_snr_weight,
     pyramid_noise_like,
     apply_noise_offset,
+    gradfilter_ema,
+    gradfilter_ma,
 )
 from library.utils import setup_logging, add_logging_arguments
 
@@ -410,6 +412,9 @@ def train(args):
         accelerator, args, 0, global_step, accelerator.device, vae, tokenizer, text_encoder, unet, controlnet=controlnet
     )
 
+    if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
+        grads = None
+
     # training loop
     for epoch in range(num_train_epochs):
         if is_main_process:
@@ -495,6 +500,23 @@ def train(args):
                 if accelerator.sync_gradients and args.max_grad_norm != 0.0:
                     params_to_clip = controlnet.parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+
+                if args.gradfilter_ema_alpha:
+                    grads = gradfilter_ema(
+                        m=controlnet,
+                        grads=grads,
+                        alpha=args.gradfilter_ema_alpha,
+                        lamb=args.gradfilter_ema_lamb,
+                    )
+                elif args.gradfilter_ma_window_size:
+                    grads = gradfilter_ma(
+                        m=controlnet,
+                        grads=grads,
+                        window_size=args.gradfilter_ma_window_size,
+                        lamb=args.gradfilter_ma_lamb,
+                        filter_type=args.gradfilter_ma_filter_type,
+                        warmup=False if args.gradfilter_ma_warmup_false else True,
+                    )
 
                 optimizer.step()
                 lr_scheduler.step()

@@ -38,6 +38,8 @@ from library.custom_train_functions import (
     prepare_scheduler_for_custom_training,
     scale_v_prediction_loss_like_noise_prediction,
     apply_debiased_estimation,
+    gradfilter_ema,
+    gradfilter_ma,
 )
 
 
@@ -320,6 +322,12 @@ def train(args):
     train_util.sample_images(accelerator, args, 0, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
 
     loss_recorder = train_util.LossRecorder()
+
+    if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
+        grads = None
+        if args.train_text_encoder:
+            grads_te = None
+
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
         current_epoch.value = epoch + 1
@@ -398,6 +406,39 @@ def train(args):
                     for m in training_models:
                         params_to_clip.extend(m.parameters())
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+
+                if args.gradfilter_ema_alpha:
+                    grads = gradfilter_ema(
+                        m=unet,
+                        grads=grads,
+                        alpha=args.gradfilter_ema_alpha,
+                        lamb=args.gradfilter_ema_lamb,
+                    )
+                    if args.train_text_encoder:
+                        grads_te = gradfilter_ema(
+                            m=text_encoder,
+                            grads=grads_te,
+                            alpha=args.gradfilter_ema_alpha,
+                            lamb=args.gradfilter_ema_lamb,
+                        )
+                elif args.gradfilter_ma_window_size:
+                    grads = gradfilter_ma(
+                        m=unet,
+                        grads=grads,
+                        window_size=args.gradfilter_ma_window_size,
+                        lamb=args.gradfilter_ma_lamb,
+                        filter_type=args.gradfilter_ma_filter_type,
+                        warmup=False if args.gradfilter_ma_warmup_false else True,
+                    )
+                    if args.train_text_encoder:
+                        grads_te = gradfilter_ma(
+                            m=text_encoder,
+                            grads=grads_te,
+                            window_size=args.gradfilter_ma_window_size,
+                            lamb=args.gradfilter_ma_lamb,
+                            filter_type=args.gradfilter_ma_filter_type,
+                            warmup=False if args.gradfilter_ma_warmup_false else True,
+                        )
 
                 optimizer.step()
                 lr_scheduler.step()

@@ -3041,6 +3041,48 @@ def add_optimizer_arguments(parser: argparse.ArgumentParser):
         help="Combines backward pass and optimizer step to reduce VRAM usage. Only available in SDXL"
         + " / バックワードパスとオプティマイザステップを組み合わせてVRAMの使用量を削減します。SDXLでのみ有効",
     )
+    parser.add_argument(
+        "--gradfilter_ema_alpha",
+        type=float,
+        default=None,
+        help="gradfilter_ema Momentum hyperparmeter of the EMA"
+        + " / バックワードパスとオプティマイザステップを組み合わせてVRAMの使用量を削減します。SDXLでのみ有効",
+    )
+    parser.add_argument(
+        "--gradfilter_ema_lamb",
+        type=float,
+        default=0.1,
+        help="gradfilter_ema Amplifying factor hyperparameter of the filter"
+        + " / バックワードパスとオプティマイザステップを組み合わせてVRAMの使用量を削減します。SDXLでのみ有効",
+    )
+    parser.add_argument(
+        "--gradfilter_ma_window_size",
+        type=int,
+        default=None,
+        help="gradfilter_ma The width of the filter window.Additional memory requirements increases linearly with respect to the windows size"
+        + " / バックワードパスとオプティマイザステップを組み合わせてVRAMの使用量を削減します。SDXLでのみ有効",
+    )
+    parser.add_argument(
+        "--gradfilter_ma_lamb",
+        type=float,
+        default=5.0,
+        help="gradfilter_ma Amplifying factor hyperparameter of the filter"
+        + " / バックワードパスとオプティマイザステップを組み合わせてVRAMの使用量を削減します。SDXLでのみ有効",
+    )
+    parser.add_argument(
+        "--gradfilter_ma_filter_type",
+        type=str,
+        default="mean",
+        choices=["mean", "sum"],
+        help="gradfilter_ma Aggregation method for the running queue"
+        + " / バックワードパスとオプティマイザステップを組み合わせてVRAMの使用量を削減します。SDXLでのみ有効",
+    )
+    parser.add_argument(
+        "--gradfilter_ma_warmup_false",
+        action="store_true",
+        help="gradfilter_ma Filter is applied until the queue is filled."
+        + " / バックワードパスとオプティマイザステップを組み合わせてVRAMの使用量を削減します。SDXLでのみ有効",
+    )
 
 
 def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: bool):

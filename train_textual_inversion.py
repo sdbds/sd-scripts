@@ -32,6 +32,8 @@ from library.custom_train_functions import (
     add_v_prediction_like_loss,
     apply_debiased_estimation,
     apply_masked_loss,
+    gradfilter_ema,
+    gradfilter_ma,
 )
 from library.utils import setup_logging, add_logging_arguments
 
@@ -546,6 +548,9 @@ class TextualInversionTrainer:
             prompt_replacement,
         )
 
+        if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
+            grads = None
+
         # training loop
         for epoch in range(num_train_epochs):
             accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
@@ -611,6 +616,23 @@ class TextualInversionTrainer:
                     if accelerator.sync_gradients and args.max_grad_norm != 0.0:
                         params_to_clip = accelerator.unwrap_model(text_encoder).get_input_embeddings().parameters()
                         accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+
+                    if args.gradfilter_ema_alpha:
+                        grads = gradfilter_ema(
+                            m=text_encoder_or_list,
+                            grads=grads,
+                            alpha=args.gradfilter_ema_alpha,
+                            lamb=args.gradfilter_ema_lamb,
+                        )
+                    elif args.gradfilter_ma_window_size:
+                        grads = gradfilter_ma(
+                            m=text_encoder_or_list,
+                            grads=grads,
+                            window_size=args.gradfilter_ma_window_size,
+                            lamb=args.gradfilter_ma_lamb,
+                            filter_type=args.gradfilter_ma_filter_type,
+                            warmup=False if args.gradfilter_ma_warmup_false else True,
+                        )
 
                     optimizer.step()
                     lr_scheduler.step()

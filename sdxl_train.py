@@ -42,6 +42,8 @@ from library.custom_train_functions import (
     add_v_prediction_like_loss,
     apply_debiased_estimation,
     apply_masked_loss,
+    gradfilter_ema,
+    gradfilter_ma,
 )
 from library.sdxl_original_unet import SdxlUNet2DConditionModel
 
@@ -601,6 +603,14 @@ def train(args):
     )
 
     loss_recorder = train_util.LossRecorder()
+
+    if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
+        grads = None
+        if args.train_text_encoder1:
+            grads_te1 = None
+        if args.train_text_encoder2:
+            grads_te2 = None
+
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
         current_epoch.value = epoch + 1
@@ -735,6 +745,53 @@ def train(args):
                     )
 
                 accelerator.backward(loss)
+
+                if args.gradfilter_ema_alpha:
+                    grads = gradfilter_ema(
+                        m=unet,
+                        grads=grads,
+                        alpha=args.gradfilter_ema_alpha,
+                        lamb=args.gradfilter_ema_lamb,
+                    )
+                    if args.train_text_encoder1:
+                        grads_te1 = gradfilter_ema(
+                            m=text_encoder1,
+                            grads=grads_te1,
+                            alpha=args.gradfilter_ema_alpha,
+                            lamb=args.gradfilter_ema_lamb,
+                        )
+                    if args.train_text_encoder2:
+                        grads_te2 = gradfilter_ema(
+                            m=text_encoder2,
+                            grads=grads_te2,
+                            alpha=args.gradfilter_ema_alpha,
+                            lamb=args.gradfilter_ema_lamb,
+                        )
+                elif args.gradfilter_ma_window_size:
+                    grads = gradfilter_ma(
+                        m=unet,
+                        grads=grads,
+                        window_size=args.gradfilter_ma_window_size,
+                        lamb=args.gradfilter_ma_lamb,
+                        filter_type=args.gradfilter_ma_filter_type,
+                        warmup=False if args.gradfilter_ma_warmup_false else True,
+                    )
+                    if args.train_text_encoder:
+                        grads_te1 = gradfilter_ma(
+                            m=text_encoder1,
+                            grads=grads_te1,
+                            window_size=args.gradfilter_ma_window_size,
+                            lamb=args.gradfilter_ma_lamb,
+                            filter_type=args.gradfilter_ma_filter_type,
+                            warmup=False if args.gradfilter_ma_warmup_false else True,
+                        )
+                    if args.train_text_encoder2:
+                        grads_te2 = gradfilter_ema(
+                            m=text_encoder2,
+                            grads=grads_te2,
+                            alpha=args.gradfilter_ema_alpha,
+                            lamb=args.gradfilter_ema_lamb,
+                        )
 
                 if not (args.fused_backward_pass or args.fused_optimizer_groups):
                     if accelerator.sync_gradients and args.max_grad_norm != 0.0:
