@@ -323,6 +323,23 @@ def train(args):
         controlnet, optimizer, train_dataloader, lr_scheduler
     )
 
+    if args.fused_backward_pass:
+        # use fused optimizer for backward pass: other optimizers will be supported in the future
+        import library.adafactor_fused
+
+        library.adafactor_fused.patch_adafactor_fused(optimizer)
+        for param_group in optimizer.param_groups:
+            for parameter in param_group["params"]:
+                if parameter.requires_grad:
+
+                    def __grad_hook(tensor: torch.Tensor, param_group=param_group):
+                        if accelerator.sync_gradients and args.max_grad_norm != 0.0:
+                            accelerator.clip_grad_norm_(tensor, args.max_grad_norm)
+                        optimizer.step_param(tensor, param_group)
+                        tensor.grad = None
+
+                    parameter.register_post_accumulate_grad_hook(__grad_hook)
+
     unet.requires_grad_(False)
     text_encoder1.requires_grad_(False)
     text_encoder2.requires_grad_(False)
@@ -599,15 +616,17 @@ def train(args):
                 loss = loss.mean()  # 平均なのでbatch_sizeで割る必要なし
 
                 accelerator.backward(loss)
-                if accelerator.sync_gradients and args.max_grad_norm != 0.0:
-                    params_to_clip = accelerator.unwrap_model(
-                        unet
-                    ).get_trainable_params()
-                    accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                if not args.fused_backward_pass:
+                    if accelerator.sync_gradients and args.max_grad_norm != 0.0:
+                        params_to_clip = controlnet.parameters()
+                        accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+                    optimizer.step()
+                    lr_scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
+                else:
+                    # optimizer.step() and optimizer.zero_grad() are called in the optimizer hook
+                    lr_scheduler.step()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
