@@ -39,6 +39,8 @@ from library.custom_train_functions import (
     prepare_scheduler_for_custom_training,
     scale_v_prediction_loss_like_noise_prediction,
     apply_debiased_estimation,
+    gradfilter_ema,
+    gradfilter_ma,
 )
 from library.utils import setup_logging, add_logging_arguments
 
@@ -479,6 +481,9 @@ def train(args):
         controlnet=controlnet,
     )
 
+    if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
+        grads = None
+
     # training loop
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
@@ -486,6 +491,10 @@ def train(args):
 
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step
+
+            if args.optimizer_accumulation_steps > 0:
+                optimizer.optimizer.optimizer_accumulation = (step + 1) % args.optimizer_accumulation_steps != 0
+
             with accelerator.accumulate(controlnet):
                 with torch.no_grad():
                     if "latents" in batch and batch["latents"] is not None:
@@ -616,6 +625,24 @@ def train(args):
                 loss = loss.mean()  # 平均なのでbatch_sizeで割る必要なし
 
                 accelerator.backward(loss)
+
+                if args.gradfilter_ema_alpha:
+                    grads = gradfilter_ema(
+                        m=controlnet,
+                        grads=grads,
+                        alpha=args.gradfilter_ema_alpha,
+                        lamb=args.gradfilter_ema_lamb,
+                    )
+                elif args.gradfilter_ma_window_size:
+                    grads = gradfilter_ma(
+                        m=controlnet,
+                        grads=grads,
+                        window_size=args.gradfilter_ma_window_size,
+                        lamb=args.gradfilter_ma_lamb,
+                        filter_type=args.gradfilter_ma_filter_type,
+                        warmup=False if args.gradfilter_ma_warmup_false else True,
+                    )
+
                 if not args.fused_backward_pass:
                     if accelerator.sync_gradients and args.max_grad_norm != 0.0:
                         params_to_clip = controlnet.parameters()
