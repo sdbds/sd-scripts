@@ -14,34 +14,23 @@ from lycoris.kohya import create_network_from_weights
 
 
 PROMPT = """
-2girls, multiple girls, 
-
-cesario (umamusume), daring tact (umamusume), umamusume, 
-
-shino (ponjiyuusu), 
-
-aged down, ahoge, animal ears, black hair, blue hair, blue sky, braid, cloud, crown braid, 
-day, green eyes, horse ears, horse girl, horse tail, loafers, long hair, mole, mole under eye, 
-multicolored hair, outdoors, pleated skirt, purple eyes, purple sailor collar, purple shirt, 
-purple skirt, purple thighhighs, sailor collar, school uniform, shirt, shoes, short hair, 
-skirt, sky, tail, thighhighs, time paradox, tracen school uniform, two-tone hair, white hair, 
-winter uniform, 
+qinglongshengzhe, 1girl, solo, breasts, looking at viewer, smile, open mouth, bangs, hair ornament, gloves, upper body, flower, choker, black gloves, hair flower, fingerless gloves, hand on hip, v, rose, black background, green choker,
 
 masterpiece, absurdres, latest, safe
 """
-NEG_PROMPT = "错误的眼睛，糟糕的人脸，毁容，糟糕的艺术，变形，多余的肢体，模糊的颜色，模糊，重复，病态，残缺"
+NEG_PROMPT = "糟糕的手指，糟糕的手，错误的眼睛，糟糕的人脸，毁容，糟糕的艺术，变形，多余的肢体，模糊的颜色，模糊，重复，病态，残缺"
 CLIP_TOKENS = 75 * 3 + 2
 ATTN_MODE = "xformers"
 H = 1024
 W = 1024
-STEPS = 16
-CFG_SCALE = 5
+STEPS = 20
+CFG_SCALE = 7
 DEVICE = "cuda"
 DTYPE = torch.float16
 
 
 if __name__ == "__main__":
-    seed_everything(0)
+    seed_everything(1026)
     with torch.inference_mode(True), torch.no_grad():
         alphas, sigmas = load_scheduler_sigmas()
         (
@@ -52,7 +41,7 @@ if __name__ == "__main__":
             clip_encoder,
             mt5_embedder,
             vae,
-        ) = load_model("./model", dtype=DTYPE, device=DEVICE)
+        ) = load_model("./Stable-diffusion/HunYuanDiT_fp16", dtype=DTYPE, device=DEVICE)
         denoiser.eval()
         denoiser.disable_fp32_silu()
         denoiser.disable_fp32_layer_norm()
@@ -62,7 +51,7 @@ if __name__ == "__main__":
 
         lycoris_net, state_dict = create_network_from_weights(
             multiplier=1.0,
-            file="./output/lokr-hy-test-step00000600.safetensors",
+            file="./output/hy-test-000006.safetensors",
             vae=vae,
             text_encoder=[clip_encoder, mt5_embedder],
             unet=denoiser,
