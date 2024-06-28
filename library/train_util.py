@@ -4625,7 +4625,7 @@ def get_scheduler_fix(args, optimizer: Optimizer, num_processes: int):
             optimizer,
             num_warmup_steps=num_warmup_steps,
             num_training_steps=num_training_steps,
-            num_cycles=float(num_cycles) / 2,
+            num_cycles=num_cycles // 2,
             **lr_scheduler_kwargs,
         )
 
