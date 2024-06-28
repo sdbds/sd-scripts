@@ -42,7 +42,7 @@ from torch.optim import Optimizer
 from torchvision import transforms
 from transformers import CLIPTokenizer, CLIPTextModel, CLIPTextModelWithProjection, T5Tokenizer
 import transformers
-from diffusers.optimization import SchedulerType, TYPE_TO_SCHEDULER_FUNCTION
+from transformers.optimization import SchedulerType, TYPE_TO_SCHEDULER_FUNCTION
 from diffusers import (
     StableDiffusionPipeline,
     DDPMScheduler,
@@ -2520,16 +2520,20 @@ def load_arbitrary_dataset(args, tokenizer) -> MinimalDataset:
     return train_dataset_group
 
 
-def load_image(image_path, alpha=False):
-    image = Image.open(image_path)
-    if alpha:
-        if not image.mode == "RGBA":
-            image = image.convert("RGBA")
-    else:
-        if not image.mode == "RGB":
-            image = image.convert("RGB")
-    img = np.array(image, np.uint8)
-    return img
+def load_image(image_path, alpha=False):    
+    try:
+        with Image.open(image_path) as image:
+            if alpha:
+                if not image.mode == "RGBA":
+                    image = image.convert("RGBA")
+            else:
+                if not image.mode == "RGB":
+                    image = image.convert("RGB")
+            img = np.array(image, np.uint8)
+            return img
+    except (IOError, OSError) as e:
+        logger.error(f"Error loading file: {image_path}")
+        raise e
 
 
 # 画像を読み込む。戻り値はnumpy.ndarray,(original width, original height),(crop left, crop top, crop right, crop bottom)
@@ -3152,6 +3156,18 @@ def add_optimizer_arguments(parser: argparse.ArgumentParser):
         action="store_true",
         help="Combines backward pass and optimizer step to reduce VRAM usage. Only available in SDXL"
         + " / バックワードパスとオプティマイザステップを組み合わせてVRAMの使用量を削減します。SDXLでのみ有効",
+    )
+    parser.add_argument(
+        "--lr_scheduler_timescale",
+        type=int,
+        default=None,
+        help="Inverse sqrt timescale for inverse sqrt scheduler,defaults to `num_warmup_steps`",
+    )
+    parser.add_argument(
+        "--lr_scheduler_min_lr_ratio",
+        type=float,
+        default=None,
+        help="The minimum learning rate as a ratio of the initial learning rate for cosine with min lr scheduler and warmup decay scheduler",
     )
     parser.add_argument(
         "--optimizer_accumulation_steps",
@@ -4537,8 +4553,12 @@ def get_scheduler_fix(args, optimizer: Optimizer, num_processes: int):
     name = args.lr_scheduler
     num_warmup_steps: Optional[int] = args.lr_warmup_steps
     num_training_steps = args.max_train_steps * num_processes  # * args.gradient_accumulation_steps
+    num_decay_steps: Optional[int] = args.lr_decay_steps
+    num_stable_steps = num_training_steps - num_warmup_steps - num_decay_steps
     num_cycles = args.lr_scheduler_num_cycles
     power = args.lr_scheduler_power
+    timescale = args.lr_scheduler_timescale
+    min_lr_ratio = args.lr_scheduler_min_lr_ratio
 
     lr_scheduler_kwargs = {}  # get custom lr_scheduler kwargs
     if args.lr_scheduler_args is not None and len(args.lr_scheduler_args) > 0:
@@ -4590,6 +4610,9 @@ def get_scheduler_fix(args, optimizer: Optimizer, num_processes: int):
     if name == SchedulerType.CONSTANT_WITH_WARMUP:
         return schedule_func(optimizer, num_warmup_steps=num_warmup_steps, **lr_scheduler_kwargs)
 
+    if name == SchedulerType.INVERSE_SQRT:
+        return schedule_func(optimizer, num_warmup_steps=num_warmup_steps, timescale=timescale, **lr_scheduler_kwargs)
+
     # All other schedulers require `num_training_steps`
     if num_training_steps is None:
         raise ValueError(f"{name} requires `num_training_steps`, please provide that argument.")
@@ -4608,7 +4631,26 @@ def get_scheduler_fix(args, optimizer: Optimizer, num_processes: int):
             optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps, power=power, **lr_scheduler_kwargs
         )
 
-    return schedule_func(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps, **lr_scheduler_kwargs)
+    if name == SchedulerType.COSINE_WITH_MIN_LR:
+        return schedule_func(
+            optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps, min_lr_rate=min_lr_ratio, **lr_scheduler_kwargs
+        )
+
+    # All other schedulers require `num_decay_steps`
+    if num_decay_steps is None:
+        raise ValueError(f"{name} requires `num_decay_steps`, please provide that argument.")
+    if name == SchedulerType.WARMUP_STABLE_DECAY:
+        return schedule_func(
+            optimizer, 
+            num_warmup_steps=num_warmup_steps, 
+            num_stable_steps=num_stable_steps, 
+            num_decay_steps=num_decay_steps, 
+            num_cycles=num_cycles, 
+            min_lr_ratio=min_lr_ratio if min_lr_ratio is not None else 0.0,
+            **lr_scheduler_kwargs
+        )
+
+    return schedule_func(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps, num_decay_steps=num_decay_steps, **lr_scheduler_kwargs)
 
 
 def prepare_dataset_args(args: argparse.Namespace, support_metadata: bool):
