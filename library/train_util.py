@@ -4606,9 +4606,6 @@ def get_scheduler_fix(args, optimizer: Optimizer, num_processes: int):
     if name == SchedulerType.CONSTANT:
         return wrap_check_needless_num_warmup_steps(schedule_func(optimizer, **lr_scheduler_kwargs))
 
-    if name == SchedulerType.PIECEWISE_CONSTANT:
-        return schedule_func(optimizer, **lr_scheduler_kwargs)  # step_rules and last_epoch are given as kwargs
-
     # All other schedulers require `num_warmup_steps`
     if num_warmup_steps is None:
         raise ValueError(f"{name} requires `num_warmup_steps`, please provide that argument.")
@@ -4628,7 +4625,7 @@ def get_scheduler_fix(args, optimizer: Optimizer, num_processes: int):
             optimizer,
             num_warmup_steps=num_warmup_steps,
             num_training_steps=num_training_steps,
-            num_cycles=num_cycles,
+            num_cycles=float(num_cycles) / 2,
             **lr_scheduler_kwargs,
         )
 
