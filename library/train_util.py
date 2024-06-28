@@ -4655,7 +4655,7 @@ def get_scheduler_fix(args, optimizer: Optimizer, num_processes: int):
             num_warmup_steps=num_warmup_steps, 
             num_stable_steps=num_stable_steps, 
             num_decay_steps=num_decay_steps, 
-            num_cycles=num_cycles, 
+            num_cycles=num_cycles / 2, 
             min_lr_ratio=min_lr_ratio if min_lr_ratio is not None else 0.0,
             **lr_scheduler_kwargs
         )
