@@ -65,7 +65,7 @@ def train(args):
     #     not args.train_text_encoder or not args.cache_text_encoder_outputs
     # ), "cache_text_encoder_outputs is not supported when training text encoder / text encoderを学習するときはcache_text_encoder_outputsはサポートされていません"
 
-    # training text encoder is not supported
+    # # training text encoder is not supported
     # assert (
     #     not args.train_text_encoder
     # ), "training text encoder is not supported currently / text encoderの学習は現在サポートされていません"
