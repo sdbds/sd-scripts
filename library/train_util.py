@@ -3140,6 +3140,12 @@ def add_optimizer_arguments(parser: argparse.ArgumentParser):
         help="Number of steps for the warmup in the lr scheduler (default is 0) / 学習率のスケジューラをウォームアップするステップ数（デフォルト0）",
     )
     parser.add_argument(
+        "--lr_decay_steps",
+        type=int,
+        default=0,
+        help="Number of steps for the decay in the lr scheduler (default is 0) ",
+    )
+    parser.add_argument(
         "--lr_scheduler_num_cycles",
         type=int,
         default=1,
