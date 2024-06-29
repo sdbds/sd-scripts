@@ -183,6 +183,8 @@ def train(args):
             raise ValueError(f"unexpected t5xxl_dtype: {args.t5xxl_dtype}")
     t5xxl_device = accelerator.device if args.t5xxl_device is None else args.t5xxl_device
 
+    clip_dtype = weight_dtype  # if not args.train_text_encoder else None
+
     # モデルを読み込む
     attn_mode = "xformers" if args.xformers else "torch"
 
@@ -190,8 +192,9 @@ def train(args):
         attn_mode == "torch"
     ), f"attn_mode {attn_mode} is not supported. Please use `--sdpa` instead of `--xformers`. / attn_mode {attn_mode} はサポートされていません。`--xformers`の代わりに`--sdpa`を使ってください。"
 
+    # models are usually loaded on CPU and moved to GPU later. This is to avoid OOM on GPU0.
     mmdit, clip_l, clip_g, t5xxl, vae = sd3_train_utils.load_target_model(
-        args, accelerator, attn_mode, weight_dtype, t5xxl_device, t5xxl_dtype
+        args, accelerator, attn_mode, weight_dtype, clip_dtype, t5xxl_device, t5xxl_dtype, vae_dtype
     )
     assert clip_l is not None, "clip_l is required / clip_lは必須です"
     assert clip_g is not None, "clip_g is required / clip_gは必須です"
@@ -278,13 +281,15 @@ def train(args):
     if not train_mmdit:
         mmdit.to(accelerator.device, dtype=weight_dtype)  # because of unet is not prepared
 
+    if args.num_last_block_to_freeze:
+        train_util.freeze_blocks(mmdit,num_last_block_to_freeze=args.num_last_block_to_freeze)
+
     training_models = []
     params_to_optimize = []
     # if train_unet:
     training_models.append(mmdit)
     # if block_lrs is None:
-    params_to_optimize = train_util.freeze_blocks_lr(mmdit, args.num_last_layers_to_freeze,args.args.learning_rate)
-    # params_to_optimize.append({"params": list(mmdit.parameters()), "lr": args.learning_rate})
+    params_to_optimize.append({"params": list(filter(lambda p: p.requires_grad, mmdit.parameters())), "lr": args.learning_rate})
     # else:
     #     params_to_optimize.extend(get_block_params_to_optimize(mmdit, block_lrs))
 
@@ -768,10 +773,10 @@ def train(args):
                             epoch,
                             num_train_epochs,
                             global_step,
-                            clip_l if args.save_clip else None,
-                            clip_g if args.save_clip else None,
-                            t5xxl if args.save_t5xxl else None,
-                            mmdit,
+                            accelerator.unwrap_model(clip_l) if args.save_clip else None,
+                            accelerator.unwrap_model(clip_g) if args.save_clip else None,
+                            accelerator.unwrap_model(t5xxl) if args.save_t5xxl else None,
+                            accelerator.unwrap_model(mmdit),
                             vae,
                         )
 
@@ -806,10 +811,10 @@ def train(args):
                     epoch,
                     num_train_epochs,
                     global_step,
-                    clip_l if args.save_clip else None,
-                    clip_g if args.save_clip else None,
-                    t5xxl if args.save_t5xxl else None,
-                    mmdit,
+                    accelerator.unwrap_model(clip_l) if args.save_clip else None,
+                    accelerator.unwrap_model(clip_g) if args.save_clip else None,
+                    accelerator.unwrap_model(t5xxl) if args.save_t5xxl else None,
+                    accelerator.unwrap_model(mmdit),
                     vae,
                 )
 
@@ -870,8 +875,9 @@ def setup_parser() -> argparse.ArgumentParser:
     custom_train_functions.add_custom_train_arguments(parser)
     sd3_train_utils.add_sd3_training_arguments(parser)
 
-    # TE training is disabled temporarily
+    # parser.add_argument("--train_text_encoder", action="store_true", help="train text encoder / text encoderも学習する")
 
+    # TE training is disabled temporarily
     # parser.add_argument(
     #     "--learning_rate_te1",
     #     type=float,
@@ -888,7 +894,6 @@ def setup_parser() -> argparse.ArgumentParser:
     # parser.add_argument(
     #     "--diffusers_xformers", action="store_true", help="use xformers by diffusers / Diffusersでxformersを使用する"
     # )
-    # parser.add_argument("--train_text_encoder", action="store_true", help="train text encoder / text encoderも学習する")
     # parser.add_argument(
     #     "--no_half_vae",
     #     action="store_true",
