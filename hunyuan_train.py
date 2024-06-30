@@ -167,7 +167,7 @@ def train(args):
         hydit,
         logit_scale,
         ckpt_info,
-    ) = hunyuan_utils.load_target_model(args, accelerator, "hydit", weight_dtype, args.use_extra_cond)
+    ) = hunyuan_utils.load_target_model(args, accelerator, "hydit", weight_dtype)
     if args.use_extra_cond:
         hydit_version = 'v1.1'
     else:
