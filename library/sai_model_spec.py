@@ -60,12 +60,16 @@ ARCH_SD_XL_V1_BASE = "stable-diffusion-xl-v1-base"
 ARCH_SD3_M = "stable-diffusion-3-medium"
 ARCH_SD3_UNKNOWN = "stable-diffusion-3"
 
+ARCH_HYDIT_V1_1 = "hunyuan-dit-g2-v1_1"
+ARCH_HYDIT_V1_2 = "hunyuan-dit-g2-v1_2"
+
 ADAPTER_LORA = "lora"
 ADAPTER_TEXTUAL_INVERSION = "textual-inversion"
 
 IMPL_STABILITY_AI = "https://github.com/Stability-AI/generative-models"
 IMPL_COMFY_UI = "https://github.com/comfyanonymous/ComfyUI"
 IMPL_DIFFUSERS = "diffusers"
+IMPL_HUNYUAN_DIT = "https://github.com/Tencent/HunyuanDiT"
 
 PRED_TYPE_EPSILON = "epsilon"
 PRED_TYPE_V = "v"
@@ -119,6 +123,7 @@ def build_metadata(
     timesteps: Optional[Tuple[int, int]] = None,
     clip_skip: Optional[int] = None,
     sd3: str = None,
+    hydit: Optional[str] = None,
 ):
     """
     sd3: only supports "m"
@@ -133,7 +138,14 @@ def build_metadata(
     # hash = precalculate_safetensors_hashes(state_dict)
     # metadata["modelspec.hash_sha256"] = hash
 
-    if sdxl:
+    if hydit:
+        if hydit == 'v1.1':
+            arch = ARCH_HYDIT_V1_1
+        elif hydit == 'v1.2':
+            arch = ARCH_HYDIT_V1_2
+        else:
+            raise ValueError(f"Invalid hydit version: {hydit}")
+    elif sdxl:
         arch = ARCH_SD_XL_V1_BASE
     elif sd3 is not None:
         if sd3 == "m":
@@ -158,7 +170,9 @@ def build_metadata(
     if not lora and not textual_inversion and is_stable_diffusion_ckpt is None:
         is_stable_diffusion_ckpt = True  # default is stable diffusion ckpt if not lora and not textual_inversion
 
-    if (lora and sdxl) or textual_inversion or is_stable_diffusion_ckpt:
+    if hydit:
+        impl = IMPL_HUNYUAN_DIT
+    elif (lora and sdxl) or textual_inversion or is_stable_diffusion_ckpt:
         # Stable Diffusion ckpt, TI, SDXL LoRA
         impl = IMPL_STABILITY_AI
     else:

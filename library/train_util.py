@@ -3023,6 +3023,7 @@ def get_sai_model_spec(
     textual_inversion: bool,
     is_stable_diffusion_ckpt: Optional[bool] = None,  # None for TI and LoRA
     sd3: str = None,
+    hydit: str = None,
 ):
     timestamp = time.time()
 
@@ -3057,6 +3058,7 @@ def get_sai_model_spec(
         timesteps=timesteps,
         clip_skip=args.clip_skip,  # None or int
         sd3=sd3,
+        hydit=hydit,
     )
     return metadata
 
