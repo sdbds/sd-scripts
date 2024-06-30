@@ -156,24 +156,16 @@ class HunYuanNetworkTrainer(train_network.NetworkTrainer):
         noisy_latents = noisy_latents.to(
             weight_dtype
         )  # TODO check why noisy_latents is not weight_dtype
+        B, C, H, W = noisy_latents.shape
 
         if args.use_extra_cond:
             # get size embeddings
             orig_size = batch["original_sizes_hw"]  # B, 2
             crop_size = batch["crop_top_lefts"]  # B, 2
             target_size = batch["target_sizes_hw"]  # B, 2
-            B, C, H, W = noisy_latents.shape
 
             style = torch.as_tensor([0] * B, device=accelerator.device)
-            image_meta_size = torch.concat(
-                [
-                    orig_size,
-                    target_size,
-                    # Not following SDXL but following HunYuan's Implementation
-                    # TODO examine if this is correct
-                    torch.zeros_like(target_size),
-                ]
-            )
+            image_meta_size = torch.concat([orig_size, target_size, crop_size])
         else:
             style = None
             image_meta_size = None
@@ -231,6 +223,7 @@ class HunYuanNetworkTrainer(train_network.NetworkTrainer):
 def setup_parser() -> argparse.ArgumentParser:
     parser = train_network.setup_parser()
     sdxl_train_util.add_sdxl_training_arguments(parser)
+    hunyuan_utils.add_hydit_arguments(parser)
     return parser
 
 
