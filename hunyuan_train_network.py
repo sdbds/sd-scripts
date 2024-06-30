@@ -59,7 +59,7 @@ class HunYuanNetworkTrainer(train_network.NetworkTrainer):
         ) = hunyuan_utils.load_target_model(
             args,
             accelerator,
-            hunyuan_models.MODEL_VERSION_HUNYUAN_V1_2,
+            hunyuan_models.MODEL_VERSION_HUNYUAN_V1_1 if args.use_extra_cond else hunyuan_models.MODEL_VERSION_HUNYUAN_V1_2,
             weight_dtype,
         )
 
@@ -68,7 +68,7 @@ class HunYuanNetworkTrainer(train_network.NetworkTrainer):
         self.ckpt_info = ckpt_info
 
         return (
-            hunyuan_models.MODEL_VERSION_HUNYUAN_V1_2,
+            hunyuan_models.MODEL_VERSION_HUNYUAN_V1_1 if args.use_extra_cond else hunyuan_models.MODEL_VERSION_HUNYUAN_V1_2,
             [text_encoder1, text_encoder2],
             vae,
             unet,
