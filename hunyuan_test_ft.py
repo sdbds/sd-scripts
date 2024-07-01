@@ -51,8 +51,8 @@ if __name__ == "__main__":
             clip_encoder,
             mt5_embedder,
             vae,
-        ) = load_model("/root/albertxyu/HunYuanDiT-V1.2-fp16-pruned", dtype=DTYPE, device=DEVICE,
-                       # dit_path="./output_pro/debug-000006.ckpt",
+        ) = load_model("./Stable-diffusion/HunYuanDiT_fp16/", dtype=DTYPE, device=DEVICE,
+                       dit_path="./Stable-diffusion/HunYuanDiT_fp16/denoiser/hy-test-db.safetensors",
                        )
 
         denoiser.eval()
