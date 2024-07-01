@@ -162,55 +162,14 @@ def train(args):
         args, accelerator, sdxl_model_util.MODEL_VERSION_SDXL_BASE_V1_0, weight_dtype
     )
 
-    unet.config = {
-        "act_fn": "silu",
-        "attention_head_dim": [5, 10, 20],
-        "block_out_channels": [320, 640, 1280],
-        "class_embed_type": None,
-        "center_input_sample": False,
-        "cross_attention_dim": 2048,
-        "down_block_types": [
-            "DownBlock2D",
-            "CrossAttnDownBlock2D",
-            "CrossAttnDownBlock2D",
-        ],
-        "downsample_padding": 1,
-        "dual_cross_attention": False,
-        "flip_sin_to_cos": True,
-        "freq_shift": 0,
-        "in_channels": 4,
-        "layers_per_block": 2,
-        "mid_block_scale_factor": 1,
-        "mid_block_type": "UNetMidBlock2DCrossAttn",
-        "norm_eps": 1e-05,
-        "norm_num_groups": 32,
-        "num_attention_heads": None,
-        "num_class_embeds": None,
-        "only_cross_attention": False,
-        "projection_class_embeddings_input_dim": 2816,
-        "resnet_time_scale_shift": "default",
-        "transformer_layers_per_block": [1, 2, 10],
-        "upcast_attention": False,
-        "use_linear_projection": True,
-        "resnet_time_scale_shift": "default",
-    }
-
-    class CustomConfig:
-        def __init__(self, **kwargs):
-            self.__dict__.update(kwargs)
-
-        def __getattr__(self, name):
-            if name in self.__dict__:
-                return self.__dict__[name]
-            else:
-                raise AttributeError(
-                    f"'{self.__class__.__name__}' object has no attribute '{name}'"
-                )
-
-        def __contains__(self, name):
-            return name in self.__dict__
-
-    unet.config = CustomConfig(**unet.config)
+    # convert U-Net
+    with torch.no_grad():
+        du_unet_sd = sdxl_model_util.convert_sdxl_unet_state_dict_to_diffusers(unet.state_dict())
+        unet.to("cpu")
+        clean_memory_on_device(accelerator.device)
+        del unet
+        unet = sdxl_model_util.UNet2DConditionModel(**sdxl_model_util.DIFFUSERS_SDXL_UNET_CONFIG)
+        unet.load_state_dict(du_unet_sd)
 
     controlnet = ControlNetModel.from_unet(unet)
 
@@ -221,9 +180,7 @@ def train(args):
                 state_dict = load_file(filename)
             else:
                 state_dict = torch.load(filename)
-            state_dict = model_util.convert_controlnet_state_dict_to_diffusers(
-                state_dict
-            )
+            state_dict = model_util.convert_controlnet_state_dict_to_diffusers(state_dict)
             controlnet.load_state_dict(state_dict)
         elif os.path.isdir(filename):
             controlnet = ControlNetModel.from_pretrained(filename)
@@ -260,15 +217,19 @@ def train(args):
         accelerator.wait_for_everyone()
 
     # モデルに xformers とか memory efficient attention を組み込む
-    train_util.replace_unet_modules(unet, args.mem_eff_attn, args.xformers, args.sdpa)
+    # train_util.replace_unet_modules(unet, args.mem_eff_attn, args.xformers, args.sdpa)
+    if args.xformers:
+        unet.enable_xformers_memory_efficient_attention()
+        controlnet.enable_xformers_memory_efficient_attention()
 
     if args.gradient_checkpointing:
+        unet.enable_gradient_checkpointing()
         controlnet.enable_gradient_checkpointing()
 
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
 
-    trainable_params = list(controlnet.parameters())
+    trainable_params = list(filter(lambda p: p.requires_grad, controlnet.parameters()))
     logger.info(f"trainable params count: {len(trainable_params)}")
     logger.info(
         f"number of trainable parameters: {sum(p.numel() for p in trainable_params if p.requires_grad)}"
@@ -313,12 +274,14 @@ def train(args):
         ), "full_fp16 requires mixed precision='fp16' / full_fp16を使う場合はmixed_precision='fp16'を指定してください。"
         accelerator.print("enable full fp16 training.")
         controlnet.to(weight_dtype)
+        unet.to(weight_dtype)
     elif args.full_bf16:
         assert (
             args.mixed_precision == "bf16"
         ), "full_bf16 requires mixed precision='bf16' / full_bf16を使う場合はmixed_precision='bf16'を指定してください。"
         accelerator.print("enable full bf16 training.")
         controlnet.to(weight_dtype)
+        unet.to(weight_dtype)
 
     # acceleratorがなんかよろしくやってくれるらしい
     controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
@@ -345,10 +308,12 @@ def train(args):
     unet.requires_grad_(False)
     text_encoder1.requires_grad_(False)
     text_encoder2.requires_grad_(False)
-    unet.to(accelerator.device)
+    unet.to(accelerator.device, dtype=weight_dtype)
 
     # transform DDP after prepare
     controlnet = controlnet.module if isinstance(controlnet, DDP) else controlnet
+
+    controlnet.train()
 
     # TextEncoderの出力をキャッシュするときにはCPUへ移動する
     if args.cache_text_encoder_outputs:
@@ -422,7 +387,7 @@ def train(args):
             init_kwargs = toml.load(args.log_tracker_config)
         accelerator.init_trackers(
             (
-                "lllite_control_net_train"
+                "controlnet_train"
                 if args.log_tracker_name is None
                 else args.log_tracker_name
             ),
@@ -562,12 +527,17 @@ def train(args):
                 orig_size = batch["original_sizes_hw"]
                 crop_size = batch["crop_top_lefts"]
                 target_size = batch["target_sizes_hw"]
-                embs = sdxl_train_util.get_size_embeddings(
-                    orig_size, crop_size, target_size, accelerator.device
-                ).to(weight_dtype)
+                # embs = sdxl_train_util.get_size_embeddings(
+                #     orig_size, crop_size, target_size, accelerator.device
+                # ).to(weight_dtype)
 
+                embs = torch.cat([orig_size, crop_size, target_size], dim=-1).to(accelerator.device).to(weight_dtype)
                 # concat embeddings
-                vector_embedding = torch.cat([pool2, embs], dim=1).to(weight_dtype)
+                #vector_embedding = torch.cat([pool2, embs], dim=1).to(weight_dtype)
+                vector_embedding_dict = {
+                    "text_embeds": pool2,
+                    "time_ids": embs
+                }
                 text_embedding = torch.cat(
                     [encoder_hidden_states1, encoder_hidden_states2], dim=2
                 ).to(weight_dtype)
@@ -580,24 +550,31 @@ def train(args):
                     )
                 )
 
-                noisy_latents = noisy_latents.to(
-                    weight_dtype
-                )  # TODO check why noisy_latents is not weight_dtype
-
                 controlnet_image = batch["conditioning_images"].to(dtype=weight_dtype)
 
-                with accelerator.autocast():
-                    # conditioning imageをControlNetに渡す / pass conditioning image to ControlNet
-                    # 内部でcond_embに変換される / it will be converted to cond_emb inside
 
-                    # それらの値を使いつつ、U-Netでノイズを予測する / predict noise with U-Net using those values
+                with accelerator.autocast():
+                    down_block_res_samples, mid_block_res_sample = controlnet(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=text_embedding,
+                        added_cond_kwargs=vector_embedding_dict,
+                        controlnet_cond=controlnet_image,
+                        return_dict=False,
+                    )
+
+                    # Predict the noise residual
                     noise_pred = unet(
                         noisy_latents,
                         timesteps,
-                        text_embedding,
-                        vector_embedding,
-                        controlnet_image,
-                    )
+                        encoder_hidden_states=text_embedding,
+                        added_cond_kwargs=vector_embedding_dict,
+                        down_block_additional_residuals=[
+                            sample.to(dtype=weight_dtype) for sample in down_block_res_samples
+                        ],
+                        mid_block_additional_residual=mid_block_res_sample.to(dtype=weight_dtype),
+                        return_dict=False,
+                    )[0]
 
                 if args.v_parameterization:
                     # v-parameterization training
@@ -739,19 +716,14 @@ def setup_parser() -> argparse.ArgumentParser:
     train_util.add_sd_models_arguments(parser)
     train_util.add_dataset_arguments(parser, False, True, True)
     train_util.add_training_arguments(parser, False)
+    train_util.add_masked_loss_arguments(parser)
     deepspeed_utils.add_deepspeed_arguments(parser)
+    train_util.add_sd_saving_arguments(parser)
     train_util.add_optimizer_arguments(parser)
     config_util.add_config_arguments(parser)
     custom_train_functions.add_custom_train_arguments(parser)
     sdxl_train_util.add_sdxl_training_arguments(parser)
 
-    parser.add_argument(
-        "--save_model_as",
-        type=str,
-        default="safetensors",
-        choices=[None, "ckpt", "pt", "safetensors"],
-        help="format to save the model (default is .safetensors) / モデル保存時の形式（デフォルトはsafetensors）",
-    )
     parser.add_argument(
         "--controlnet_model_name_or_path",
         type=str,
@@ -759,10 +731,9 @@ def setup_parser() -> argparse.ArgumentParser:
         help="controlnet model name or path / controlnetのモデル名またはパス",
     )
     parser.add_argument(
-        "--conditioning_data_dir",
-        type=str,
-        default=None,
-        help="conditioning data directory / 条件付けデータのディレクトリ",
+        "--no_half_vae",
+        action="store_true",
+        help="do not use fp16/bf16 VAE in mixed precision (use float VAE) / mixed precisionでも fp16/bf16 VAEを使わずfloat VAEを使う",
     )
 
     return parser
