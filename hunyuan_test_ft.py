@@ -13,9 +13,9 @@ from library.hunyuan_utils import *
 
 
 PROMPT = """
-qinglongshengzhe, 1girl, solo, breasts, looking at viewer, smile, open mouth, bangs, hair between eyes, bare shoulders, collarbone, upper body, detached sleeves, midriff, crop top, black background
+qinglongshengzhe, Striped sundress, espadrille wedges, 1girl, solo, breasts, looking at viewer, smile, open mouth, bangs, upper body, hair flower, hand on hip, v,shore,masterpiece, best quality, absurdres, newest,
 """
-NEG_PROMPT = "错误的眼睛，糟糕的人脸，毁容，糟糕的艺术，变形，多余的肢体，模糊的颜色，模糊，重复，病态，残缺"
+NEG_PROMPT = "black background，错误的眼睛，糟糕的人脸，毁容，糟糕的艺术，变形，多余的肢体，模糊的颜色，模糊，重复，病态，残缺"
 CLIP_TOKENS = 75 * 3 + 2
 ATTN_MODE = "xformers"
 H = 1024
@@ -52,7 +52,7 @@ if __name__ == "__main__":
             mt5_embedder,
             vae,
         ) = load_model("./Stable-diffusion/HunYuanDiT_fp16/", dtype=DTYPE, device=DEVICE,
-                       dit_path="./Stable-diffusion/HunYuanDiT_fp16/denoiser/hy-test-db.safetensors",
+                       dit_path="./output/hy-test-db.safetensors",
                        )
 
         denoiser.eval()
