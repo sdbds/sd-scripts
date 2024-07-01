@@ -236,9 +236,13 @@ def load_model(model_path: str, dtype=torch.float16, device="cuda", use_extra_co
     denoiser: HunYuanDiT
     denoiser, patch_size, head_dim = DiT_g_2(input_size=(128, 128), use_extra_cond=use_extra_cond)
     if dit_path is not None:
-        state_dict = torch.load(dit_path)
-        if 'state_dict' in state_dict:
-            state_dict = state_dict['state_dict']
+        if model_util.is_safetensors(dit_path):
+            state_dict = load_file(dit_path)
+        else:
+            state_dict = torch.load(dit_path)
+            if 'state_dict' in state_dict:
+                state_dict = state_dict['state_dict']
+            
     else:
         state_dict = torch.load(os.path.join(model_path, "denoiser/pytorch_model_module.pt"))
     denoiser.load_state_dict(state_dict)
