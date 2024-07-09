@@ -323,7 +323,6 @@ def train(args):
     if args.num_last_block_to_freeze:
         train_util.freeze_blocks(mmdit,num_last_block_to_freeze=args.num_last_block_to_freeze)
 
-
     training_models = []
     params_to_optimize = []
     # if train_unet:
