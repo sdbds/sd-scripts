@@ -28,6 +28,7 @@ FILES_ONNX = ["model.onnx"]
 SUB_DIR = "variables"
 SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
 CSV_FILE = FILES[-1]
+PARENTS_CSV = "tag_implications.csv"
 
 
 def preprocess_image(image):
@@ -213,6 +214,35 @@ def main(args):
             elif source in rating_tags:
                 rating_tags[rating_tags.index(source)] = target
 
+    if args.remove_parents_tag:
+        csv_file_name = PARENTS_CSV
+        csv_file_path = os.path.join(args.model_dir, csv_file_name)
+        if not os.path.exists(csv_file_path) or args.force_download:
+            csv_file_path = hf_hub_download(
+                repo_id="deepghs/danbooru_wikis_full", 
+                filename=csv_file_name,
+                cache_dir=args.model_dir, 
+                force_download=True,
+                force_filename=csv_file_name,
+                repo_type="dataset",
+            )
+            print(f"Downloaded {csv_file_name} to {csv_file_path}")
+        else:
+            print(f"Using existing {csv_file_name}")
+        
+        parent_to_child_map = {}
+        with open(csv_file_path, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            line = [row for row in reader]
+            header = line[0]  # child_tag,parent_tag
+            rows = line[1:]
+        assert header[3] == "antecedent_name" and header[4] == "consequent_name", f"unexpected csv format: {header}"
+        for row in rows[0:]:
+            child_tag, parent_tag = row[3], row[4]
+            if parent_tag not in parent_to_child_map:
+                parent_to_child_map[parent_tag] = []
+            parent_to_child_map[parent_tag].append(child_tag)
+
     # 画像を読み込む
     train_data_dir_path = Path(args.train_data_dir)
     image_paths = train_util.glob_images_pathlib(train_data_dir_path, args.recursive)
@@ -290,6 +320,21 @@ def main(args):
                     if tag in combined_tags:
                         combined_tags.remove(tag)
                         combined_tags.insert(0, tag)
+
+            if args.remove_parents_tag:
+                for tag in list(combined_tags):
+                    if tag in parent_to_child_map:
+                        if any(child_tag in combined_tags for child_tag in parent_to_child_map[tag]):
+                            combined_tags.remove(tag)
+
+                noun_root_counts = {}
+                for tag in combined_tags:
+                    noun_root = tag.split()[-1]
+                    noun_root_counts[noun_root] = noun_root_counts.get(noun_root, 0) + 1
+
+                # 移除只有一个名词且该名词词根出现超过一次的标签
+                combined_tags[:] = [tag for tag in combined_tags if not (len(tag.split()) == 1 and noun_root_counts[tag.split()[-1]] > 1)]
+
 
             # 先頭のカンマを取る
             if len(general_tag_text) > 0:
@@ -491,6 +536,12 @@ def setup_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="expand tag tail parenthesis to another tag for character tags. `chara_name_(series)` becomes `chara_name, series`"
         + " / キャラクタタグの末尾の括弧を別のタグに展開する。`chara_name_(series)` は `chara_name, series` になる",
+    )
+    parser.add_argument(
+        "--remove_parents_tag",
+        action="store_true",
+        help="Auto remove parents tag e.g. `red rose` replace `red flowers` and 'rose'"
+        + " / 親タグを自動的に削除します。例:red roseはred flowersとroseに置き換えられます",
     )
 
     return parser
