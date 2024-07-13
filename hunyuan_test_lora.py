@@ -14,14 +14,14 @@ from library.hunyuan_utils import *
 from networks.lora import create_network_from_weights
 
 from copy import deepcopy
-PROMPT = "青花瓷风格, 在白色背景上，一只小狗在追逐蝴蝶"
-NEG_PROMPT = ""
-CLIP_TOKENS = 75 * 2 + 2
+PROMPT = "qinglongshengzhe, Striped sundress, espadrille wedges, 1girl, solo, breasts, looking at viewer, smile, open mouth, bangs, upper body, hair flower, hand on hip, v,shore,masterpiece, best quality, absurdres, newest,"
+NEG_PROMPT = "black background，错误的眼睛，糟糕的人脸，毁容，糟糕的艺术，变形，多余的肢体，模糊的颜色，模糊，重复，病态，残缺"
+CLIP_TOKENS = 75 * 3 + 2
 ATTN_MODE = "xformers"
 H = 1024
 W = 1024
-STEPS = 100
-CFG_SCALE = 6
+STEPS = 30
+CFG_SCALE = 5
 DEVICE = "cuda"
 DTYPE = torch.float16
 
@@ -34,11 +34,11 @@ if VERSION == "1.1":
 elif VERSION == "1.2":
     BETA_END = 0.018
     USE_EXTRA_COND = False
-    MODEL_PATH = '/root/albertxyu/HunYuanDiT-V1.2-fp16-pruned'
+    MODEL_PATH = './Stable-diffusion/HunYuanDiT_fp16/'
 else:
     raise ValueError(f"Invalid version: {VERSION}")
 
-LORA_WEIGHT = '/apdcephfs_cq10/share_1367250/jiahaoli/0630_gui_output_v1.2/last-000001.ckpt'
+LORA_WEIGHT = './output/hy-test-lora.safetensors'
 save_path = './test_lora_v1.2_epoch1_lora.png'
 
 def load_scheduler_sigmas(beta_start=0.00085, beta_end=0.018, num_train_timesteps=1000):
