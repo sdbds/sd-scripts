@@ -15,7 +15,7 @@ from networks.lora import create_network_from_weights
 
 from copy import deepcopy
 PROMPT = "qinglongshengzhe, Striped sundress, espadrille wedges, 1girl, solo, breasts, looking at viewer, smile, open mouth, bangs, upper body, hair flower, hand on hip, v,shore,masterpiece, best quality, absurdres, newest,"
-NEG_PROMPT = "black background，错误的眼睛，糟糕的人脸，毁容，糟糕的艺术，变形，多余的肢体，模糊的颜色，模糊，重复，病态，残缺"
+NEG_PROMPT = "错误的眼睛，糟糕的人脸，毁容，糟糕的艺术，变形，多余的肢体，模糊的颜色，模糊，重复，病态，残缺，"
 CLIP_TOKENS = 75 * 3 + 2
 ATTN_MODE = "xformers"
 H = 1024
