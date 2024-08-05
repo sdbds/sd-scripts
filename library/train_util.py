@@ -657,8 +657,16 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def set_current_epoch(self, epoch):
         if not self.current_epoch == epoch:  # epochが切り替わったらバケツをシャッフルする
-            self.shuffle_buckets()
-        self.current_epoch = epoch
+            if epoch > self.current_epoch:
+                logger.info("epoch is incremented. current_epoch: {}, epoch: {}".format(self.current_epoch, epoch))
+                num_epochs = epoch - self.current_epoch
+                for _ in range(num_epochs):
+                    self.current_epoch += 1
+                    self.shuffle_buckets()
+                # self.current_epoch seem to be set to 0 again in the next epoch. it may be caused by skipped_dataloader?
+            else:
+                logger.warning("epoch is not incremented. current_epoch: {}, epoch: {}".format(self.current_epoch, epoch))
+                self.current_epoch = epoch
 
     def set_current_step(self, step):
         self.current_step = step
@@ -2426,16 +2434,20 @@ def load_arbitrary_dataset(args, tokenizer) -> MinimalDataset:
     return train_dataset_group
 
 
-def load_image(image_path, alpha=False):
-    image = Image.open(image_path)
-    if alpha:
-        if not image.mode == "RGBA":
-            image = image.convert("RGBA")
-    else:
-        if not image.mode == "RGB":
-            image = image.convert("RGB")
-    img = np.array(image, np.uint8)
-    return img
+def load_image(image_path, alpha=False):    
+    try:
+        with Image.open(image_path) as image:
+            if alpha:
+                if not image.mode == "RGBA":
+                    image = image.convert("RGBA")
+            else:
+                if not image.mode == "RGB":
+                    image = image.convert("RGB")
+            img = np.array(image, np.uint8)
+            return img
+    except (IOError, OSError) as e:
+        logger.error(f"Error loading file: {image_path}")
+        raise e
 
 
 # 画像を読み込む。戻り値はnumpy.ndarray,(original width, original height),(crop left, crop top, crop right, crop bottom)
@@ -5553,6 +5565,8 @@ class LossRecorder:
         if epoch == 0:
             self.loss_list.append(loss)
         else:
+            while len(self.loss_list) <= step:
+                self.loss_list.append(0.0)
             self.loss_total -= self.loss_list[step]
             self.loss_list[step] = loss
         self.loss_total += loss
