@@ -25,20 +25,22 @@ imagesize==1.4.1
 # timm==0.6.12
 # fairscale==0.4.13
 # for WD14 captioning (tensorflow)
-# tensorflow==2.10.1
+tensorflow==2.14.1
 # for WD14 captioning (onnx)
 onnx==1.15.0
 # onnxruntime-gpu==1.17.1
 # onnxruntime==1.17.1
 # for cuda 12.1(default 11.8)
-onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+--extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+onnxruntime-gpu
+omegaconf
 
 # for HunYuanDiT
 sentencepiece==0.2.0
 timm==1.0.7
 
 # this is for onnx: 
-# protobuf==3.20.3
+protobuf==3.20.3
 # open clip for SDXL
 # open-clip-torch==2.20.0
 # For logging

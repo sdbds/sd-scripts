@@ -62,12 +62,14 @@ ARCH_SD3_UNKNOWN = "stable-diffusion-3"
 
 ARCH_HYDIT_V1_1 = "hunyuan-dit-g2-v1_1"
 ARCH_HYDIT_V1_2 = "hunyuan-dit-g2-v1_2"
+ARCH_STABLE_CASCADE = "stable-cascade"
 
 ADAPTER_LORA = "lora"
 ADAPTER_TEXTUAL_INVERSION = "textual-inversion"
 
 IMPL_STABILITY_AI = "https://github.com/Stability-AI/generative-models"
 IMPL_COMFY_UI = "https://github.com/comfyanonymous/ComfyUI"
+IMPL_STABILITY_AI_STABLE_CASCADE = "https://github.com/Stability-AI/StableCascade"
 IMPL_DIFFUSERS = "diffusers"
 IMPL_HUNYUAN_DIT = "https://github.com/Tencent/HunyuanDiT"
 
@@ -124,6 +126,7 @@ def build_metadata(
     clip_skip: Optional[int] = None,
     sd3: str = None,
     hydit: Optional[str] = None,
+    stable_cascade: Optional[bool] = None,
 ):
     """
     sd3: only supports "m"
@@ -145,6 +148,8 @@ def build_metadata(
             arch = ARCH_HYDIT_V1_2
         else:
             raise ValueError(f"Invalid hydit version: {hydit}")
+    elif stable_cascade:
+        arch = ARCH_STABLE_CASCADE
     elif sdxl:
         arch = ARCH_SD_XL_V1_BASE
     elif sd3 is not None:
@@ -172,6 +177,8 @@ def build_metadata(
 
     if hydit:
         impl = IMPL_HUNYUAN_DIT
+    elif stable_cascade:
+        impl = IMPL_STABILITY_AI_STABLE_CASCADE
     elif (lora and sdxl) or textual_inversion or is_stable_diffusion_ckpt:
         # Stable Diffusion ckpt, TI, SDXL LoRA
         impl = IMPL_STABILITY_AI
