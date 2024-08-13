@@ -10,6 +10,7 @@ bitsandbytes==0.43.3
 prodigyopt==1.0
 lion-pytorch==0.0.6
 torch-optimi==0.2.1
+adam-mini==1.0.1
 tensorboard
 safetensors==0.4.2
 # gradio==3.16.2

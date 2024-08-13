@@ -4370,7 +4370,7 @@ def resume_from_local_or_hf_if_specified(accelerator, args):
     accelerator.load_state(dirname)
 
 
-def get_optimizer(args, trainable_params):
+def get_optimizer(args, trainable_params, model=None):
     # "Optimizer to use: AdamW, AdamW8bit, Lion, SGDNesterov, SGDNesterov8bit, PagedAdamW, PagedAdamW8bit, PagedAdamW32bit, Lion8bit, PagedLion8bit, DAdaptation(DAdaptAdamPreprint), DAdaptAdaGrad, DAdaptAdam, DAdaptAdan, DAdaptAdanIP, DAdaptLion, DAdaptSGD, Adafactor"
 
     optimizer_type = args.optimizer_type
@@ -4729,6 +4729,23 @@ def get_optimizer(args, trainable_params):
             optimizer_class = torch.optim.AdamW
             logger.info(f"use AdamW optimizer | {optimizer_kwargs}")
         optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
+    elif optimizer_type == "AdamMini".lower():
+        logger.info(f"use AdamMini optimizer | {optimizer_kwargs}")
+        try:
+            import adam_mini
+            optimizer_class = adam_mini.Adam_mini
+        except ImportError:
+            raise ImportError("No adam-mini / adam-mini がインストールされていないようです")
+        
+        # trainable_params → named_parameters
+        named_params = [(f"{model}.{name}", param) for name, param in model.named_parameters() if param in trainable_params]
+
+        optimizer = optimizer_class(named_params, lr=lr, **optimizer_kwargs)
+        optimizer.embd_names.add("to_out")
+        optimizer.wqk_names.add("to_q")
+        optimizer.wqk_names.add('to_k')
+        optimizer.wqk_names.add('to_v')
 
     if optimizer is None:
         # 任意のoptimizerを使う
