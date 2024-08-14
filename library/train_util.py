@@ -4135,6 +4135,12 @@ def add_dataset_arguments(
         help="resolution in training ('size' or 'width,height') / 学習時の画像解像度（'サイズ'指定、または'幅,高さ'指定）",
     )
     parser.add_argument(
+        "--network_multiplier",
+        type=float,
+        default=1.0,
+        help="network multiplier to adjust the influence of the network",
+    )
+    parser.add_argument(
         "--cache_latents",
         action="store_true",
         help="cache latents to main memory to reduce VRAM usage (augmentations must be disabled) / VRAM削減のためにlatentをメインメモリにcacheする（augmentationは使用不可） ",
@@ -4737,15 +4743,14 @@ def get_optimizer(args, trainable_params, model=None):
             optimizer_class = adam_mini.Adam_mini
         except ImportError:
             raise ImportError("No adam-mini / adam-mini がインストールされていないようです")
-        
-        # trainable_params → named_parameters
-        named_params = [(f"{model}.{name}", param) for name, param in model.named_parameters() if param in trainable_params]
 
+        # 验证 p.requires_grad = True
+        named_params = [(name, param) for name, param in model.named_parameters() if param.requires_grad]
+
+        optimizer_kwargs["dim"] = 722
+        optimizer_kwargs["n_heads"] = 19
         optimizer = optimizer_class(named_params, lr=lr, **optimizer_kwargs)
-        optimizer.embd_names.add("to_out")
-        optimizer.wqk_names.add("to_q")
-        optimizer.wqk_names.add('to_k')
-        optimizer.wqk_names.add('to_v')
+        optimizer.embd_names.add("attn")
 
     if optimizer is None:
         # 任意のoptimizerを使う

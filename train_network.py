@@ -403,14 +403,14 @@ class NetworkTrainer:
 
         # if a new network is added in future, add if ~ then blocks for each network (;'∀')
         if args.dim_from_weights:
-            network, _ = network_module.create_network_from_weights(1, args.network_weights, vae, text_encoder, unet, **net_kwargs)
+            network, _ = network_module.create_network_from_weights(args.network_multiplier, args.network_weights, vae, text_encoder, unet, **net_kwargs)
         else:
             if "dropout" not in net_kwargs:
                 # workaround for LyCORIS (;^ω^)
                 net_kwargs["dropout"] = args.network_dropout
 
             network = network_module.create_network(
-                1.0,
+                args.network_multiplier,
                 args.network_dim,
                 args.network_alpha,
                 vae,
@@ -421,7 +421,7 @@ class NetworkTrainer:
             )
         if network is None:
             return
-        network_has_multiplier = hasattr(network, "set_multiplier")
+        network_has_multiplier = hasattr(network, "set_multiplier") and args.network_multiplier is not 1.0
 
         if hasattr(network, "prepare_network"):
             network.prepare_network(args)
@@ -434,6 +434,9 @@ class NetworkTrainer:
         train_unet = not args.network_train_text_encoder_only
         train_text_encoder = self.is_train_text_encoder(args)
         network.apply_to(text_encoder, unet, train_text_encoder, train_unet)
+
+        if args.num_last_block_to_freeze:
+            train_util.freeze_blocks(network,num_last_block_to_freeze=args.num_last_block_to_freeze, block_name="txt")
 
         if args.network_weights is not None:
             # FIXME consider alpha of weights
