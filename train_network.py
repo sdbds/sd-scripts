@@ -556,11 +556,13 @@ class NetworkTrainer:
             if t_enc.device.type != "cpu":
                 t_enc.to(dtype=te_weight_dtype)
                     # nn.Embedding not support FP8
-                if hasattr(t_enc, "text_model"):
-                    t_enc.text_model.embeddings.to(dtype=(weight_dtype if te_weight_dtype != weight_dtype else te_weight_dtype))
-                elif hasattr(t_enc, "embeddings"):
-                    # HunYuan Bert(CLIP)
-                    t_enc.embeddings.to(dtype=(weight_dtype if te_weight_dtype != weight_dtype else te_weight_dtype))
+                if hasattr(t_enc, "text_model") and hasattr(t_enc.text_model, "embeddings"):
+                    # nn.Embedding not support FP8
+                    t_enc.text_model.embeddings.to(
+                        dtype=(weight_dtype if te_weight_dtype != weight_dtype else te_weight_dtype))
+                elif hasattr(t_enc, "encoder") and hasattr(t_enc.encoder, "embeddings"):
+                    t_enc.encoder.embeddings.to(
+                        dtype=(weight_dtype if te_weight_dtype != weight_dtype else te_weight_dtype))
                 elif hasattr(t_enc, "get_token_embedding"):
                     # Others (mT5 or other encoder, will have custom method to get the correct embedding)
                     t_enc.get_token_embedding().to(dtype=(weight_dtype if te_weight_dtype != weight_dtype else te_weight_dtype))
