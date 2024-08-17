@@ -4744,13 +4744,14 @@ def get_optimizer(args, trainable_params, model=None):
         except ImportError:
             raise ImportError("No adam-mini / adam-mini がインストールされていないようです")
 
-        # 验证 p.requires_grad = True
+        # p.requires_grad = True
         named_params = [(name, param) for name, param in model.named_parameters() if param.requires_grad]
 
         optimizer_kwargs["dim"] = 722
         optimizer_kwargs["n_heads"] = 19
         optimizer = optimizer_class(named_params, lr=lr, **optimizer_kwargs)
         optimizer.embd_names.add("attn")
+        optimizer.embd_names.add("mlp")
 
     if optimizer is None:
         # 任意のoptimizerを使う
