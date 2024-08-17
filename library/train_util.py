@@ -4739,7 +4739,7 @@ def get_optimizer(args, trainable_params, model=None):
     elif optimizer_type == "AdamMini".lower():
         logger.info(f"use AdamMini optimizer | {optimizer_kwargs}")
         try:
-            import adam_mini
+            import library.adam_mini as adam_mini
             optimizer_class = adam_mini.Adam_mini
         except ImportError:
             raise ImportError("No adam-mini / adam-mini がインストールされていないようです")
