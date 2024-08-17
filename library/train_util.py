@@ -2643,7 +2643,7 @@ class MinimalDataset(BaseDataset):
         raise NotImplementedError
 
 
-def load_arbitrary_dataset(args, tokenizer) -> MinimalDataset:
+def load_arbitrary_dataset(args, tokenizer=None) -> MinimalDataset:
     module = ".".join(args.dataset_class.split(".")[:-1])
     dataset_class = args.dataset_class.split(".")[-1]
     module = importlib.import_module(module)
@@ -3177,7 +3177,7 @@ SS_METADATA_MINIMUM_KEYS = [
 
 
 def build_minimum_network_metadata(
-    v2: Optional[bool],
+    v2: Optional[str],
     base_model: Optional[str],
     network_module: str,
     network_dim: str,
