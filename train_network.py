@@ -438,8 +438,8 @@ class NetworkTrainer:
         train_text_encoder = self.is_train_text_encoder(args)
         network.apply_to(text_encoder, unet, train_text_encoder, train_unet)
 
-        if args.num_last_block_to_freeze:
-            train_util.freeze_blocks(network,num_last_block_to_freeze=args.num_last_block_to_freeze, block_name="txt")
+        # if args.num_last_block_to_freeze:
+        #     train_util.freeze_blocks(network,num_last_block_to_freeze=args.num_last_block_to_freeze, block_name="txt")
 
         if args.network_weights is not None:
             # FIXME consider alpha of weights
