@@ -4746,9 +4746,6 @@ def get_optimizer(args, trainable_params, model=None):
 
         named_params = [(name, param) for name, param in model.named_parameters() if param.requires_grad]
 
-        optimizer_kwargs["dim"] = 722
-        optimizer_kwargs["n_heads"] = 19
-
         optimizer = optimizer_class(named_params, lr=lr, **optimizer_kwargs)
         optimizer.embd_names.add("layer.weight")
         optimizer.embd_names.add("final_layer.linear.weight")
