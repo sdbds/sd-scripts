@@ -177,6 +177,11 @@ def train(args):
     # モデルを読み込む
     name = "schnell" if "schnell" in args.pretrained_model_name_or_path else "dev"
 
+    def unwrap_model(model):
+        model = accelerator.unwrap_model(model)
+        model = model._orig_mod if isinstance(model, torch._dynamo.eval_frame.OptimizedModule) else model
+        return model
+
     # load VAE for caching latents
     ae = None
     if cache_latents:
@@ -214,6 +219,8 @@ def train(args):
 
     text_encoding_strategy = strategy_flux.FluxTextEncodingStrategy(args.apply_t5_attn_mask)
     strategy_base.TextEncodingStrategy.set_strategy(text_encoding_strategy)
+
+    tokenize_strategy = strategy_flux.TokenizeStrategy()
 
     # cache text encoder outputs
     sample_prompts_te_outputs = None
@@ -773,7 +780,7 @@ def train(args):
                             epoch,
                             num_train_epochs,
                             global_step,
-                            accelerator.unwrap_model(flux),
+                            unwrap_model(flux),
                         )
 
             current_loss = loss.detach().item()  # 平均なのでbatch sizeは関係ないはず
@@ -807,7 +814,7 @@ def train(args):
                     epoch,
                     num_train_epochs,
                     global_step,
-                    accelerator.unwrap_model(flux),
+                    unwrap_model(flux),
                 )
 
         flux_train_utils.sample_images(
@@ -816,7 +823,7 @@ def train(args):
 
     is_main_process = accelerator.is_main_process
     # if is_main_process:
-    flux = accelerator.unwrap_model(flux)
+    flux = unwrap_model(flux)
 
     accelerator.end_training()
 

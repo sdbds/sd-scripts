@@ -290,7 +290,10 @@ def main(args):
                         general_tag_text += caption_separator + tag_name
                         combined_tags.append(tag_name)
                 elif i >= len(general_tags) and p >= args.character_threshold:
-                    tag_name = character_tags[i - len(general_tags)]
+                    character_index = i - len(general_tags)
+                    # 确保character_index在character_tags的有效索引范围内
+                    if character_index < len(character_tags) and p >= args.character_threshold:
+                        tag_name = character_tags[character_index]
 
                     if tag_name not in undesired_tags:
                         tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
