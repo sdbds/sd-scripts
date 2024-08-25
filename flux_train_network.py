@@ -291,7 +291,13 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
         img_ids = flux_utils.prepare_img_ids(bsz, packed_latent_height, packed_latent_width).to(device=accelerator.device)
 
         # get guidance
-        guidance_vec = torch.full((bsz,), args.guidance_scale, device=accelerator.device)
+        if args.guidance_rescale:
+            decay_factor = 1 - timesteps / 1000
+            # make sure least guidance scale is 1.0
+            guidance_scale = args.guidance_scale *  decay_factor + 1.0
+        else:
+            guidance_scale = args.guidance_scale
+        guidance_vec = guidance_scale * torch.ones((bsz,), device=accelerator.device)
 
         # ensure the hidden state will require grad
         if args.gradient_checkpointing:

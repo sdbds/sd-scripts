@@ -558,6 +558,12 @@ def add_flux_train_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--guidance_rescale",
+        action="store_true",
+        help="rescale the guidance to match the original guidance scale",
+    )
+
+    parser.add_argument(
         "--timestep_sampling",
         choices=["sigma", "uniform", "sigmoid"],
         default="sigma",
