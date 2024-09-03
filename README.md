@@ -11,6 +11,10 @@ The command to install PyTorch is as follows:
 
 ### Recent Updates
 
+Sep 1, 2024:
+- `--timestamp_sampling` has `flux_shift` option. Thanks to sdbds!
+  - This is the same shift as FLUX.1 dev inference, adjusting the timestep sampling depending on the resolution. `--discrete_flow_shift` is ignored when `flux_shift` is specified. It is not verified which is better, `shift` or `flux_shift`.
+
 Aug 29, 2024: 
 Please update `safetensors` to `0.4.4` to fix the error when using `--resume`. `requirements.txt` is updated.
 
@@ -73,6 +77,7 @@ There are many unknown points in FLUX.1 training, so some settings can be specif
   - `uniform`: uniform random
   - `sigmoid`: sigmoid of random normal, same as x-flux, AI-toolkit etc.
   - `shift`: shifts the value of sigmoid of normal distribution random number
+  - `flux_shift`: shifts the value of sigmoid of normal distribution random number, depending on the resolution (same as FLUX.1 dev inference). `--discrete_flow_shift` is ignored when `flux_shift` is specified.
 - `--sigmoid_scale` is the scale factor for sigmoid timestep sampling (only used when timestep-sampling is "sigmoid"). The default is 1.0. Larger values will make the sampling more uniform.
   - This option is effective even when`--timestep_sampling shift` is specified.
   - Normally, leave it at 1.0. Larger values make the value before shift closer to a uniform distribution.
@@ -179,7 +184,7 @@ Options are almost the same as LoRA training. The difference is `--full_bf16`, `
 
 `--blockwise_fused_optimizers` enables the fusing of the optimizer step into the backward pass for each block. This is similar to `--fused_backward_pass`. Any optimizer can be used, but Adafactor is recommended for memory efficiency. `--blockwise_fused_optimizers` cannot be used with `--fused_backward_pass`. Stochastic rounding is not supported for now.
 
-`--double_blocks_to_swap` and `--single_blocks_to_swap` are the number of double blocks and single blocks to swap. The default is None (no swap). These options must be combined with `--fused_backward_pass` or `--blockwise_fused_optimizers`. `--double_blocks_to_swap` can be specified with `--single_blocks_to_swap`. The recommended maximum number of blocks to swap is 9 for double blocks and 18 for single blocks.
+`--double_blocks_to_swap` and `--single_blocks_to_swap` are the number of double blocks and single blocks to swap. The default is None (no swap). These options must be combined with `--fused_backward_pass` or `--blockwise_fused_optimizers`. `--double_blocks_to_swap` can be specified with `--single_blocks_to_swap`. The recommended maximum number of blocks to swap is 9 for double blocks and 18 for single blocks. Please see the next chapter for details.
 
 `--cpu_offload_checkpointing` is to offload the gradient checkpointing to CPU. This reduces about 2GB of VRAM usage.
 
@@ -193,24 +198,32 @@ The learning rate and the number of epochs are not optimized yet. Please adjust 
 
 #### Key Features for FLUX.1 fine-tuning
 
-1. Sample Image Generation:
+1.  Technical details of double/single block swap:
+    - Reduce memory usage by transferring double and single blocks of FLUX.1 from GPU to CPU when they are not needed.
+    - During forward pass, the weights of the blocks that have finished calculation are transferred to CPU, and the weights of the blocks to be calculated are transferred to GPU.
+    - The same is true for the backward pass, but the order is reversed. The gradients remain on the GPU.
+    - Since the transfer between CPU and GPU takes time, the training will be slower.
+    - `--double_blocks_to_swap` and `--single_blocks_to_swap` specify the number of blocks to swap. For example, `--double_blocks_to_swap 6` swaps 6 blocks at each step of training, but the remaining 13 blocks are always on the GPU.
+    - About 640MB of memory can be saved per double block, and about 320MB of memory can be saved per single block.
+
+2. Sample Image Generation:
    - Sample image generation during training is now supported.
    - The prompts are cached and used for generation if `--cache_latents` is specified. So changing the prompts during training will not affect the generated images.
    - Specify options such as `--sample_prompts` and `--sample_every_n_epochs`.
    - Note: It will be very slow when `--split_mode` is specified.
 
-2. Experimental Memory-Efficient Saving:
+3. Experimental Memory-Efficient Saving:
    - `--mem_eff_save` option can further reduce memory consumption during model saving (about 22GB).
    - This is a custom implementation and may cause unexpected issues. Use with caution.
 
-3. T5XXL Token Length Control:
+4. T5XXL Token Length Control:
    - Added `--t5xxl_max_token_length` option to specify the maximum token length of T5XXL.
    - Default is 512 in dev and 256 in schnell models.
 
-4. Multi-GPU Training Support:
+5. Multi-GPU Training Support:
    - Note: `--double_blocks_to_swap` and `--single_blocks_to_swap` cannot be used in multi-GPU training.
 
-5. Disable mmap Load for Safetensors:
+6. Disable mmap Load for Safetensors:
    - `--disable_mmap_load_safetensors` option now works in `flux_train.py`.
    - Speeds up model loading during training in WSL2.
    - Effective in reducing memory usage when loading models during multi-GPU training.
@@ -308,6 +321,9 @@ resolution = [512, 512]
 ## SD3 training
 
 SD3 training is done with `sd3_train.py`. 
+
+__Sep 1, 2024__:
+- `--num_last_block_to_freeze` is added to `sd3_train.py`. This option is to freeze the last n blocks of the MMDiT. See [#1417](https://github.com/kohya-ss/sd-scripts/pull/1417) for details. Thanks to sdbds!
 
 __Jul  27, 2024__: 
 - Latents and text encoder outputs caching mechanism is refactored significantly. 
