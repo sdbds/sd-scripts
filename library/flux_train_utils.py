@@ -412,7 +412,7 @@ def get_noisy_model_input_and_timesteps(
         logits_norm = torch.randn(bsz, device=device)
         logits_norm = logits_norm * args.sigmoid_scale  # larger scale for more uniform sampling
         timesteps = logits_norm.sigmoid()
-        mu = get_lin_function(y1=1.0, y2=3.1582)((h // 2) * (w // 2))
+        mu = get_lin_function(y1=0.5, y2=2.01)((h // 2) * (w // 2))
         timesteps = time_shift(mu, 1.0, timesteps)
 
         t = timesteps.view(-1, 1, 1, 1)
