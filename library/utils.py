@@ -14,6 +14,7 @@ import cv2
 from PIL import Image
 import numpy as np
 
+
 def fire_in_thread(f, *args, **kwargs):
     threading.Thread(target=f, args=args, kwargs=kwargs).start()
 
@@ -83,17 +84,6 @@ def setup_logging(args=None, log_level=None, reset=False):
         logger = logging.getLogger(__name__)
         logger.info(msg_init)
 
-def pil_resize(image, size, interpolation=Image.LANCZOS):
-
-    pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-
-    # use Pillow resize
-    resized_pil = pil_image.resize(size, interpolation)
-
-    # return cv2 image
-    resized_cv2 = cv2.cvtColor(np.array(resized_pil), cv2.COLOR_RGB2BGR)
-
-    return resized_cv2
 
 def str_to_dtype(s: Optional[str], default_dtype: Optional[torch.dtype] = None) -> torch.dtype:
     """
@@ -313,6 +303,17 @@ class MemoryEfficientSafeOpen:
             # print(f"Warning: {dtype_str} is not supported in this PyTorch version. Converting to float16.")
             # return byte_tensor.view(torch.uint8).to(torch.float16).reshape(shape)
             raise ValueError(f"Unsupported float8 type: {dtype_str} (upgrade PyTorch to support float8 types)")
+
+def pil_resize(image, size, interpolation=Image.LANCZOS):
+    pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+    # use Pillow resize
+    resized_pil = pil_image.resize(size, interpolation)
+
+    # return cv2 image
+    resized_cv2 = cv2.cvtColor(np.array(resized_pil), cv2.COLOR_RGB2BGR)
+
+    return resized_cv2
 
 
 # TODO make inf_utils.py
