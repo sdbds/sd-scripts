@@ -63,7 +63,6 @@ easygui==0.98.3
 einops==0.7.0
     # via
     #   -r requirements.txt
-    #   lycoris-lora
 entrypoints==0.4
     # via altair
 exceptiongroup==1.2.2
@@ -145,8 +144,6 @@ lightning-utilities==0.11.7
     #   pytorch-lightning
     #   torchmetrics
 lion-pytorch==0.0.6
-    # via -r requirements.txt
-lycoris-lora==3.0.0.post1
     # via -r requirements.txt
 markdown==3.7
     # via tensorboard
@@ -348,7 +345,6 @@ tokenizers==0.19.1
 toml==0.10.2
     # via
     #   -r requirements.txt
-    #   lycoris-lora
 toolz==0.12.1
     # via altair
 torch==2.4.1+cu124
@@ -358,7 +354,6 @@ torch==2.4.1+cu124
     #   bitsandbytes
     #   diffusers
     #   lion-pytorch
-    #   lycoris-lora
     #   pytorch-lightning
     #   pytorch-optimizer
     #   timm
@@ -376,7 +371,6 @@ torchvision==0.19.1+cu124
 tqdm==4.64.1
     # via
     #   huggingface-hub
-    #   lycoris-lora
     #   pytorch-lightning
     #   transformers
 transformers==4.44.2
