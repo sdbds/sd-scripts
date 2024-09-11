@@ -559,6 +559,9 @@ class TextualInversionTrainer:
             unet,
             prompt_replacement,
         )
+        if len(accelerator.trackers) > 0:
+            # log empty object to commit the sample images to wandb
+            accelerator.log({}, step=0)
 
         if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
             grads = None
@@ -718,7 +721,7 @@ class TextualInversionTrainer:
                                 remove_model(remove_ckpt_name)
 
                 current_loss = loss.detach().item()
-                if args.logging_dir is not None:
+                if len(accelerator.trackers) > 0:
                     logs = {"loss": current_loss, "lr": float(lr_scheduler.get_last_lr()[0])}
                     if (
                         args.optimizer_type.lower().startswith("DAdapt".lower()) or args.optimizer_type.lower() == "Prodigy".lower()
@@ -736,7 +739,7 @@ class TextualInversionTrainer:
                 if global_step >= args.max_train_steps:
                     break
 
-            if args.logging_dir is not None:
+            if len(accelerator.trackers) > 0:
                 logs = {"loss/epoch": loss_total / len(train_dataloader)}
                 accelerator.log(logs, step=epoch + 1)
 
@@ -773,6 +776,7 @@ class TextualInversionTrainer:
                 unet,
                 prompt_replacement,
             )
+            accelerator.log({})
 
             # end of epoch
 
