@@ -640,14 +640,14 @@ class TextualInversionTrainer:
 
                     if args.gradfilter_ema_alpha:
                         grads = gradfilter_ema(
-                            m=text_encoder_or_list,
+                            m=text_encoder,
                             grads=grads,
                             alpha=args.gradfilter_ema_alpha,
                             lamb=args.gradfilter_ema_lamb,
                         )
                     elif args.gradfilter_ma_window_size:
                         grads = gradfilter_ma(
-                            m=text_encoder_or_list,
+                            m=text_encoder,
                             grads=grads,
                             window_size=args.gradfilter_ma_window_size,
                             lamb=args.gradfilter_ma_lamb,
