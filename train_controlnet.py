@@ -301,9 +301,14 @@ def train(args):
         controlnet.to(weight_dtype)
 
     # acceleratorがなんかよろしくやってくれるらしい
-    controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        controlnet, optimizer, train_dataloader, lr_scheduler
-    )
+    if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
+        controlnet, optimizer, train_dataloader = accelerator.prepare(
+            controlnet, optimizer, train_dataloader
+        )
+    else:
+        controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+            controlnet, optimizer, train_dataloader, lr_scheduler
+        )
 
     if args.fused_backward_pass:
         import library.adafactor_fused
@@ -440,6 +445,8 @@ def train(args):
         current_epoch.value = epoch + 1
 
         for step, batch in enumerate(train_dataloader):
+            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
+                optimizer.train()
             current_step.value = global_step
             with accelerator.accumulate(controlnet):
                 with torch.no_grad():
@@ -538,14 +545,13 @@ def train(args):
                         params_to_clip = controlnet.parameters()
                         accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
-                    optimizer.step()
+                optimizer.step()
+                if not (args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper):
                     lr_scheduler.step()
-                    optimizer.zero_grad(set_to_none=True)
-                else:
-                    # optimizer.step() and optimizer.zero_grad() are called in the optimizer hook
-                    if args.optimizer_accumulation_steps > 0:
-                        if (not optimizer.optimizer.optimizer_accumulation):
-                            lr_scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+
+            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
+                optimizer.eval()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:

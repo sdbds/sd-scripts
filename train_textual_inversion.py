@@ -429,10 +429,7 @@ class TextualInversionTrainer:
         lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
 
         # acceleratorがなんかよろしくやってくれるらしい
-        if args.optimizer_type.lower().endswith("schedulefree"):
-            optimizer, train_dataloader = accelerator.prepare(optimizer, train_dataloader)
-        else:
-            optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
+        optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
         text_encoders = [accelerator.prepare(text_encoder) for text_encoder in text_encoders]
 
         index_no_updates_list = []
@@ -457,11 +454,11 @@ class TextualInversionTrainer:
         unet.to(accelerator.device, dtype=weight_dtype)
         if args.gradient_checkpointing:  # according to TI example in Diffusers, train is required
             # TODO U-Netをオリジナルに置き換えたのでいらないはずなので、後で確認して消す
-            if (args.optimizer_type.lower().endswith("schedulefree")):
+            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
                 optimizer.train()
             unet.train()
         else:
-            if (args.optimizer_type.lower().endswith("schedulefree")):
+            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
                 optimizer.eval()
             unet.eval()
 
@@ -577,7 +574,7 @@ class TextualInversionTrainer:
             loss_total = 0
 
             for step, batch in enumerate(train_dataloader):
-                if (args.optimizer_type.lower().endswith("schedulefree")):
+                if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
                     optimizer.train()
                 current_step.value = global_step
                 with accelerator.accumulate(text_encoders[0]):
@@ -659,7 +656,8 @@ class TextualInversionTrainer:
                         )
 
                     optimizer.step()
-                    lr_scheduler.step()
+                    if not (args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper):
+                        lr_scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
 
                     # Let's make sure we don't update any embedding weights besides the newly added token
@@ -673,7 +671,7 @@ class TextualInversionTrainer:
                                 index_no_updates
                             ]
 
-                if (args.optimizer_type.lower().endswith("schedulefree")):
+                if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
                     optimizer.eval()
 
                 # Checks if the accelerator has performed an optimization step behind the scenes

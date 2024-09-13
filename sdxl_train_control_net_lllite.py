@@ -309,7 +309,7 @@ def train(args):
     unet.to(weight_dtype)
 
     # acceleratorがなんかよろしくやってくれるらしい
-    if args.optimizer_type.lower().endswith("schedulefree"):
+    if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
         unet, optimizer, train_dataloader = accelerator.prepare(unet, optimizer, train_dataloader)
     else:
         unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(unet, optimizer, train_dataloader, lr_scheduler)
@@ -318,12 +318,12 @@ def train(args):
         unet._set_static_graph()  # avoid error for multiple use of the parameter
 
     if args.gradient_checkpointing:
-        if (args.optimizer_type.lower().endswith("schedulefree")):
+        if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
             optimizer.train()
         unet.train()  # according to TI example in Diffusers, train is required -> これオリジナルのU-Netしたので本当は外せる
 
     else:
-        if (args.optimizer_type.lower().endswith("schedulefree")):
+        if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
             optimizer.eval()
         unet.eval()
 
@@ -429,7 +429,7 @@ def train(args):
         current_epoch.value = epoch + 1
 
         for step, batch in enumerate(train_dataloader):
-            if (args.optimizer_type.lower().endswith("schedulefree")):
+            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
                 optimizer.train()
             current_step.value = global_step
             with accelerator.accumulate(unet):
@@ -542,11 +542,11 @@ def train(args):
                     )
 
                 optimizer.step()
-                if not args.optimizer_type.lower().endswith("schedulefree"):
+                if not (args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper):
                     lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
 
-            if (args.optimizer_type.lower().endswith("schedulefree")):
+            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
                 optimizer.eval()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
