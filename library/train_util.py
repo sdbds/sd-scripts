@@ -4771,6 +4771,15 @@ def get_optimizer(args, trainable_params, model=None):
         optimizer.wqk_names.add("attn")
         optimizer.wqk_names.add('mlp')
 
+    elif optimizer_type == "Sara".lower():
+        logger.info(f"use Sara optimizer | {optimizer_kwargs}")
+        try:
+            import library.adamw_sara as sara
+            optimizer_class = sara.AdamW
+        except ImportError:
+            raise ImportError("No sara / sara がインストールされていないようです")
+        optimizer = optimizer_class(model, **optimizer_kwargs)
+
     if optimizer is None:
         # 任意のoptimizerを使う
         optimizer_type = args.optimizer_type  # lowerでないやつ（微妙）
