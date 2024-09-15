@@ -6,7 +6,8 @@ from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 import torch
 from transformers import CLIPTokenizer, CLIPTextModel, CLIPTextModelWithProjection
-
+import lance
+import pyarrow as pa
 
 # TODO remove circular import by moving ImageInfo to a separate file
 # from library.train_util import ImageInfo
@@ -362,3 +363,39 @@ class LatentsCachingStrategy:
         if alpha_mask is not None:
             kwargs["alpha_mask" + key_reso_suffix] = alpha_mask.float().cpu().numpy()
         np.savez(npz_path, **kwargs)
+
+    def save_latents_to_lance(
+            self,
+            lance_path,
+            latents_tensor,
+            original_size,
+            crop_ltrb,
+            flipped_latents_tensor=None,
+            alpha_mask=None,
+            key_reso_suffix="",
+        ):
+
+            # Prepare the data dictionary
+            data = {}
+
+            if os.path.exists(lance_path):
+                # Load existing Lance data and convert it to a dictionary
+                existing_table = lance.dataset(lance_path).to_table()
+                existing_data = existing_table.to_pydict()
+                data.update(existing_data)
+
+            # Add new data to the dictionary
+            data["latents" + key_reso_suffix] = [latents_tensor.float().cpu().numpy()]
+            data["original_size" + key_reso_suffix] = [np.array(original_size)]
+            data["crop_ltrb" + key_reso_suffix] = [np.array(crop_ltrb)]
+
+            if flipped_latents_tensor is not None:
+                data["latents_flipped" + key_reso_suffix] = [flipped_latents_tensor.float().cpu().numpy()]
+            if alpha_mask is not None:
+                data["alpha_mask" + key_reso_suffix] = [alpha_mask.float().cpu().numpy()]
+
+            # Convert the data dictionary to a PyArrow Table
+            table = pa.Table.from_pydict(data)
+
+            # Write the table to a Lance file
+            lance.write_dataset(table, lance_path, mode='overwrite')
