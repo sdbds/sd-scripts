@@ -272,7 +272,7 @@ def train(args):
 
     flux.requires_grad_(True)
 
-    is_swapping_blocks = args.double_blocks_to_swap is not None or args.single_blocks_to_swap is not None
+    is_swapping_blocks = args.double_blocks_to_swap or args.single_blocks_to_swap
     if is_swapping_blocks:
         # Swap blocks between CPU and GPU to reduce memory usage, in forward and backward passes.
         # This idea is based on 2kpr's great work. Thank you!
@@ -354,8 +354,13 @@ def train(args):
 
         logger.info(f"using {len(optimizers)} optimizers for blockwise fused optimizers")
 
+        if train_util.is_schedulefree_optimizer(optimizers[0], args):
+            raise ValueError("Schedule-free optimizer is not supported with blockwise fused optimizers")
+        optimizer_train_fn = lambda: None  # dummy function
+        optimizer_eval_fn = lambda: None  # dummy function
     else:
         _, _, optimizer = train_util.get_optimizer(args, trainable_params=params_to_optimize, model=flux)
+        optimizer_train_fn, optimizer_eval_fn = train_util.get_optimizer_train_eval_fn(optimizer, args)
 
     # prepare dataloader
     # strategies are set here because they cannot be referenced in another process. Copy them with the dataset
@@ -782,6 +787,7 @@ def train(args):
                 progress_bar.update(1)
                 global_step += 1
 
+                optimizer_eval_fn()
                 flux_train_utils.sample_images(
                     accelerator, args, None, global_step, flux, ae, [clip_l, t5xxl], sample_prompts_te_outputs
                 )
@@ -800,6 +806,7 @@ def train(args):
                             global_step,
                             unwrap_model(flux),
                         )
+                optimizer_train_fn()
 
             current_loss = loss.detach().item()  # 平均なのでbatch sizeは関係ないはず
             if len(accelerator.trackers) > 0:
@@ -822,6 +829,7 @@ def train(args):
 
         accelerator.wait_for_everyone()
 
+        optimizer_eval_fn()
         if args.save_every_n_epochs is not None:
             if accelerator.is_main_process:
                 flux_train_utils.save_flux_model_on_epoch_end_or_stepwise(
@@ -838,12 +846,14 @@ def train(args):
         flux_train_utils.sample_images(
             accelerator, args, epoch + 1, global_step, flux, ae, [clip_l, t5xxl], sample_prompts_te_outputs
         )
+        optimizer_train_fn()
 
     is_main_process = accelerator.is_main_process
     # if is_main_process:
     flux = unwrap_model(flux)
 
     accelerator.end_training()
+    optimizer_eval_fn()
 
     if args.save_state or args.save_state_on_train_end:
         train_util.save_state_on_train_end(args, accelerator)
