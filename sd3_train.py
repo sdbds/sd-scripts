@@ -374,7 +374,6 @@ def train(args):
         mmdit.to(accelerator.device, dtype=weight_dtype)  # because of unet is not prepared
 
     if args.num_last_block_to_freeze:
-
         # freeze last n blocks of MM-DIT
         block_name = "x_block"
         filtered_blocks = [(name, param) for name, param in mmdit.named_parameters() if block_name in name]
