@@ -139,7 +139,45 @@ The majority of scripts is licensed under ASL 2.0 (including codes from Diffuser
 
 ### Working in progress
 
+- __important__ The dependent libraries are updated. Please see [Upgrade](#upgrade) and update the libraries.
+  - transformers, accelerate and huggingface_hub are updated. 
+  - If you encounter any issues, please report them.
+
+- Improvements in OFT (Orthogonal Finetuning) Implementation
+  1. Optimization of Calculation Order:
+      - Changed the calculation order in the forward method from (Wx)R to W(xR).
+      - This has improved computational efficiency and processing speed.
+  2. Correction of Bias Application:
+      - In the previous implementation, R was incorrectly applied to the bias.
+      - The new implementation now correctly handles bias by using F.conv2d and F.linear.
+  3. Efficiency Enhancement in Matrix Operations:
+      - Introduced einsum in both the forward and merge_to methods.
+      - This has optimized matrix operations, resulting in further speed improvements.
+  4. Proper Handling of Data Types:
+      - Improved to use torch.float32 during calculations and convert results back to the original data type.
+      - This maintains precision while ensuring compatibility with the original model.
+  5. Unified Processing for Conv2d and Linear Layers:
+     - Implemented a consistent method for applying OFT to both layer types.
+  - These changes have made the OFT implementation more efficient and accurate, potentially leading to improved model performance and training stability.
+
+  - Additional Information
+    * Recommended α value for OFT constraint: We recommend using α values between 1e-4 and 1e-2. This differs slightly from the original implementation of "(α\*out_dim\*out_dim)". Our implementation uses "(α\*out_dim)", hence we recommend higher values than the 1e-5 suggested in the original implementation.
+
+    * Performance Improvement: Training speed has been improved by approximately 30%.
+
+    * Inference Environment: This implementation is compatible with and operates within Stable Diffusion web UI (SD1/2 and SDXL).
+
+- The INVERSE_SQRT, COSINE_WITH_MIN_LR, and WARMUP_STABLE_DECAY learning rate schedules are now available in the transformers library. See PR [#1393](https://github.com/kohya-ss/sd-scripts/pull/1393) for details. Thanks to sdbds!
+  - See the [transformers documentation](https://huggingface.co/docs/transformers/v4.44.2/en/main_classes/optimizer_schedules#schedules) for details on each scheduler.
+  - `--lr_warmup_steps` and `--lr_decay_steps` can now be specified as a ratio of the number of training steps, not just the step value. Example: `--lr_warmup_steps=0.1` or `--lr_warmup_steps=10%`, etc.
+
+https://github.com/kohya-ss/sd-scripts/pull/1393
+- When enlarging images in the script (when the size of the training image is small and bucket_no_upscale is not specified), it has been changed to use Pillow's resize and LANCZOS interpolation instead of OpenCV2's resize and Lanczos4 interpolation. The quality of the image enlargement may be slightly improved. PR [#1426](https://github.com/kohya-ss/sd-scripts/pull/1426) Thanks to sdbds!
+
+- Sample image generation during training now works on non-CUDA devices. PR [#1433](https://github.com/kohya-ss/sd-scripts/pull/1433) Thanks to millie-v!
+
 - `--v_parameterization` is available in `sdxl_train.py`. The results are unpredictable, so use with caution. PR [#1505](https://github.com/kohya-ss/sd-scripts/pull/1505) Thanks to liesened!
+
 - Fused optimizer is available for SDXL training. PR [#1259](https://github.com/kohya-ss/sd-scripts/pull/1259) Thanks to 2kpr!
   - The memory usage during training is significantly reduced by integrating the optimizer's backward pass with step. The training results are the same as before, but if you have plenty of memory, the speed will be slower.
   - Specify the `--fused_backward_pass` option in `sdxl_train.py`. At this time, only AdaFactor is supported. Gradient accumulation is not available.
@@ -265,6 +303,21 @@ https://github.com/kohya-ss/sd-scripts/pull/1290) frodo821 氏に感謝します
 - DeepSpeed 使用時のいくつかのバグを修正しました。関連 [#1247](https://github.com/kohya-ss/sd-scripts/pull/1247)
 
 - `gen_imgs.py` のプロンプトオプションに、保存時のファイル名を指定する `--f` オプションを追加しました。また同スクリプトで Diffusers ベースのキーを持つ LoRA の重みに対応しました。
+
+
+### Sep 13, 2024 / 2024-09-13: 
+
+- `sdxl_merge_lora.py` now supports OFT. Thanks to Maru-mee for the PR [#1580](https://github.com/kohya-ss/sd-scripts/pull/1580). 
+- `svd_merge_lora.py` now supports LBW. Thanks to terracottahaniwa. See PR [#1575](https://github.com/kohya-ss/sd-scripts/pull/1575) for details.
+- `sdxl_merge_lora.py` also supports LBW. 
+- See [LoRA Block Weight](https://github.com/hako-mikan/sd-webui-lora-block-weight) by hako-mikan for details on LBW.
+- These will be included in the next release.
+
+- `sdxl_merge_lora.py` が OFT をサポートされました。PR [#1580](https://github.com/kohya-ss/sd-scripts/pull/1580) Maru-mee 氏に感謝します。
+- `svd_merge_lora.py` で LBW がサポートされました。PR [#1575](https://github.com/kohya-ss/sd-scripts/pull/1575) terracottahaniwa 氏に感謝します。
+- `sdxl_merge_lora.py` でも LBW がサポートされました。
+- LBW の詳細は hako-mikan 氏の [LoRA Block Weight](https://github.com/hako-mikan/sd-webui-lora-block-weight) をご覧ください。
+- 以上は次回リリースに含まれます。
 
 ### Jun 23, 2024 / 2024-06-23: 
 
