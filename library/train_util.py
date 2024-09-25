@@ -3328,19 +3328,19 @@ def add_optimizer_arguments(parser: argparse.ArgumentParser):
         help='additional arguments for optimizer (like "weight_decay=0.01 betas=0.9,0.999 ...") / オプティマイザの追加引数（例： "weight_decay=0.01 betas=0.9,0.999 ..."）',
     )
 
-    # parser.add_argument(
-    #     "--optimizer_schedulefree_wrapper",
-    #     action="store_true",
-    #     help="use schedulefree_wrapper any optimizer / 任意のオプティマイザにschedulefree_wrapperを使用",
-    # )
+    parser.add_argument(
+        "--optimizer_schedulefree_wrapper",
+        action="store_true",
+        help="use schedulefree_wrapper any optimizer / 任意のオプティマイザにschedulefree_wrapperを使用",
+    )
 
-    # parser.add_argument(
-    #     "--schedulefree_wrapper_args",
-    #     type=str,
-    #     default=None,
-    #     nargs="*",
-    #     help='additional arguments for schedulefree_wrapper (like "momentum=0.9 weight_decay_at_y=0.1 ...") / オプティマイザの追加引数（例： "momentum=0.9 weight_decay_at_y=0.1 ..."）',
-    # )
+    parser.add_argument(
+        "--schedulefree_wrapper_args",
+        type=str,
+        default=None,
+        nargs="*",
+        help='additional arguments for schedulefree_wrapper (like "momentum=0.9 weight_decay_at_y=0.1 ...") / オプティマイザの追加引数（例： "momentum=0.9 weight_decay_at_y=0.1 ..."）',
+    )
 
     parser.add_argument("--lr_scheduler_type", type=str, default="", help="custom scheduler module / 使用するスケジューラ")
     parser.add_argument(
