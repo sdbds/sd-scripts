@@ -9,6 +9,11 @@ except Exception:
     HAS_CUDA = False
 
 try:
+    HAS_TF32 = torch.cuda.get_device_properties(0).major >= 8
+except Exception:
+    HAS_TF32 = False
+
+try:
     HAS_MPS = torch.backends.mps.is_available()
 except Exception:
     HAS_MPS = False
@@ -82,3 +87,15 @@ def init_ipex():
             return
     except Exception as e:
         print("failed to initialize ipex:", e)
+
+def tf32_on():
+    """
+    Enable TF32 on supported GPUs.
+    """
+    if HAS_TF32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        print("TF32 enabled")
+    else:
+        print("TF32 is not supported on this device")
