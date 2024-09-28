@@ -532,6 +532,7 @@ class NetworkTrainer:
             collate_fn=collator,
             num_workers=n_workers,
             persistent_workers=args.persistent_data_loader_workers,
+            pin_memory=True,
         )
 
         # 学習ステップ数を計算する
@@ -1131,12 +1132,12 @@ class NetworkTrainer:
                     on_step_start(text_encoder, unet)
 
                     if "latents" in batch and batch["latents"] is not None:
-                        latents = batch["latents"].to(accelerator.device).to(dtype=weight_dtype)
+                        latents = batch["latents"].to(accelerator.device, non_blocking=True).to(dtype=weight_dtype, non_blocking=True)
                     else:
                         with torch.no_grad():
                             # latentに変換
-                            latents = self.encode_images_to_latents(args, accelerator, vae, batch["images"].to(vae_dtype))
-                            latents = latents.to(dtype=weight_dtype)
+                            latents = self.encode_images_to_latents(args, accelerator, vae, batch["images"].to(vae_dtype, non_blocking=True))
+                            latents = latents.to(dtype=weight_dtype, non_blocking=True)
 
                             # NaNが含まれていれば警告を表示し0に置き換える
                             if torch.any(torch.isnan(latents)):
@@ -1174,14 +1175,14 @@ class NetworkTrainer:
                                     clip_skip=args.clip_skip,
                                 )
                             else:
-                                input_ids = [ids.to(accelerator.device) for ids in batch["input_ids_list"]]
+                                input_ids = [ids.to(accelerator.device, non_blocking=True) for ids in batch["input_ids_list"]]
                                 encoded_text_encoder_conds = text_encoding_strategy.encode_tokens(
                                     tokenize_strategy,
                                     self.get_models_for_text_encoding(args, accelerator, text_encoders),
                                     input_ids,
                                 )
                                 if args.full_fp16:
-                                    encoded_text_encoder_conds = [c.to(weight_dtype) for c in encoded_text_encoder_conds]
+                                    encoded_text_encoder_conds = [c.to(weight_dtype, non_blocking=True) for c in encoded_text_encoder_conds]
 
                         # if text_encoder_conds is not cached, use encoded_text_encoder_conds
                         if len(text_encoder_conds) == 0:

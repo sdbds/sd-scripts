@@ -2,9 +2,10 @@ import argparse
 
 import torch
 from accelerate import Accelerator
-from library.device_utils import init_ipex, clean_memory_on_device
+from library.device_utils import init_ipex, clean_memory_on_device, tf32_on
 
 init_ipex()
+tf32_on()
 
 from library import sdxl_model_util, sdxl_train_util, strategy_base, strategy_sd, strategy_sdxl, train_util
 import train_network
