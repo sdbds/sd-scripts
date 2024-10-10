@@ -1,26 +1,32 @@
 import argparse
-import json
 import math
 import os
 import random
-import time
 from multiprocessing import Value
-from types import SimpleNamespace
 import toml
 
 from tqdm import tqdm
 
 import torch
 from library.device_utils import init_ipex, clean_memory_on_device
+
 init_ipex()
 
-from torch.nn.parallel import DistributedDataParallel as DDP
 from accelerate.utils import set_seed
-from diffusers import DDPMScheduler, ControlNetModel
+from accelerate import init_empty_weights
+from diffusers import DDPMScheduler
+from diffusers.utils.torch_utils import is_compiled_module
 from safetensors.torch import load_file
-from library import deepspeed_utils, sai_model_spec, sdxl_model_util, sdxl_original_unet, sdxl_train_util
+from library import (
+    deepspeed_utils,
+    sai_model_spec,
+    sdxl_model_util,
+    sdxl_train_util,
+    strategy_base,
+    strategy_sd,
+    strategy_sdxl,
+)
 
-import library.model_util as model_util
 import library.train_util as train_util
 import library.config_util as config_util
 from library.config_util import (
@@ -33,12 +39,10 @@ from library.custom_train_functions import (
     add_v_prediction_like_loss,
     apply_snr_weight,
     prepare_scheduler_for_custom_training,
-    pyramid_noise_like,
-    apply_noise_offset,
     scale_v_prediction_loss_like_noise_prediction,
     apply_debiased_estimation,
 )
-import networks.control_net_lllite as control_net_lllite
+from library.sdxl_original_control_net import SdxlControlNet, SdxlControlledUNet
 from library.utils import setup_logging, add_logging_arguments
 
 setup_logging()
@@ -74,7 +78,15 @@ def train(args):
         args.seed = random.randint(0, 2**32)
     set_seed(args.seed)
 
-    tokenizer1, tokenizer2 = sdxl_train_util.load_tokenizers(args)
+    tokenize_strategy = strategy_sdxl.SdxlTokenizeStrategy(args.max_token_length, args.tokenizer_cache_dir)
+    strategy_base.TokenizeStrategy.set_strategy(tokenize_strategy)
+    tokenizer1, tokenizer2 = tokenize_strategy.tokenizer1, tokenize_strategy.tokenizer2  # this is used for sampling images
+
+    # prepare caching strategy: this must be set before preparing dataset. because dataset may use this strategy for initialization.
+    latents_caching_strategy = strategy_sd.SdSdxlLatentsCachingStrategy(
+        False, args.cache_latents_to_disk, args.vae_batch_size, False
+    )
+    strategy_base.LatentsCachingStrategy.set_strategy(latents_caching_strategy)
 
     # データセットを準備する
     blueprint_generator = BlueprintGenerator(ConfigSanitizer(False, False, True, True))
@@ -101,7 +113,7 @@ def train(args):
             ]
         }
 
-    blueprint = blueprint_generator.generate(user_config, args, tokenizer=[tokenizer1, tokenizer2])
+    blueprint = blueprint_generator.generate(user_config, args)
     train_dataset_group = config_util.generate_dataset_group_by_blueprint(blueprint.dataset_group)
 
     current_epoch = Value("i", 0)
@@ -112,6 +124,7 @@ def train(args):
     train_dataset_group.verify_bucket_reso_steps(32)
 
     if args.debug_dataset:
+        train_dataset_group.set_current_strategies()  # dasaset needs to know the strategies explicitly
         train_util.debug_dataset(train_dataset_group)
         return
     if len(train_dataset_group) == 0:
@@ -139,6 +152,11 @@ def train(args):
     accelerator = train_util.prepare_accelerator(args)
     is_main_process = accelerator.is_main_process
 
+    def unwrap_model(model):
+        model = accelerator.unwrap_model(model)
+        model = model._orig_mod if is_compiled_module(model) else model
+        return model
+
     # mixed precisionに対応した型を用意しておき適宜castする
     weight_dtype, save_dtype = train_util.prepare_dtype(args)
     vae_dtype = torch.float32 if args.no_half_vae else weight_dtype
@@ -154,62 +172,106 @@ def train(args):
         ckpt_info,
     ) = sdxl_train_util.load_target_model(args, accelerator, sdxl_model_util.MODEL_VERSION_SDXL_BASE_V1_0, weight_dtype)
 
-    # モデルに xformers とか memory efficient attention を組み込む
-    train_util.replace_unet_modules(unet, args.mem_eff_attn, args.xformers, args.sdpa)
+    unet.to(accelerator.device)  # reduce main memory usage
+
+    # convert U-Net to Controlled U-Net
+    logger.info("convert U-Net to Controlled U-Net")
+    unet_sd = unet.state_dict()
+    with init_empty_weights():
+        unet = SdxlControlledUNet()
+    unet.load_state_dict(unet_sd, strict=True, assign=True)
+    del unet_sd
+
+    # make control net
+    logger.info("make ControlNet")
+    if args.controlnet_model_path:
+        with init_empty_weights():
+            control_net = SdxlControlNet()
+
+        logger.info(f"load ControlNet from {args.controlnet_model_path}")
+        filename = args.controlnet_model_path
+        if os.path.splitext(filename)[1] == ".safetensors":
+            state_dict = load_file(filename)
+        else:
+            state_dict = torch.load(filename)
+        info = control_net.load_state_dict(state_dict, strict=True, assign=True)
+        logger.info(f"ControlNet loaded from {filename}: {info}")
+    else:
+        control_net = SdxlControlNet()
+
+        logger.info("initialize ControlNet from U-Net")
+        info = control_net.init_from_unet(unet)
+        logger.info(f"ControlNet initialized from U-Net: {info}")
 
     # 学習を準備する
     if cache_latents:
         vae.to(accelerator.device, dtype=vae_dtype)
         vae.requires_grad_(False)
         vae.eval()
-        with torch.no_grad():
-            train_dataset_group.cache_latents(
-                vae,
-                args.vae_batch_size,
-                args.cache_latents_to_disk,
-                accelerator.is_main_process,
-            )
+
+        train_dataset_group.new_cache_latents(vae, accelerator.is_main_process)
+
         vae.to("cpu")
         clean_memory_on_device(accelerator.device)
 
         accelerator.wait_for_everyone()
 
+    text_encoding_strategy = strategy_sdxl.SdxlTextEncodingStrategy()
+    strategy_base.TextEncodingStrategy.set_strategy(text_encoding_strategy)
+
     # TextEncoderの出力をキャッシュする
     if args.cache_text_encoder_outputs:
         # Text Encodes are eval and no grad
-        with torch.no_grad():
-            train_dataset_group.cache_text_encoder_outputs(
-                (tokenizer1, tokenizer2),
-                (text_encoder1, text_encoder2),
-                accelerator.device,
-                None,
-                args.cache_text_encoder_outputs_to_disk,
-                accelerator.is_main_process,
-            )
+        text_encoder_output_caching_strategy = strategy_sdxl.SdxlTextEncoderOutputsCachingStrategy(
+            args.cache_text_encoder_outputs_to_disk, None, False
+        )
+        strategy_base.TextEncoderOutputsCachingStrategy.set_strategy(text_encoder_output_caching_strategy)
+
+        text_encoder1.to(accelerator.device)
+        text_encoder2.to(accelerator.device)
+        with accelerator.autocast():
+            train_dataset_group.new_cache_text_encoder_outputs([text_encoder1, text_encoder2], accelerator.is_main_process)
+
         accelerator.wait_for_everyone()
 
-    # prepare ControlNet
-    network = control_net_lllite.ControlNetLLLite(unet, args.cond_emb_dim, args.network_dim, args.network_dropout)
-    network.apply_to()
-
-    if args.network_weights is not None:
-        info = network.load_weights(args.network_weights)
-        accelerator.print(f"load ControlNet weights from {args.network_weights}: {info}")
+    # モデルに xformers とか memory efficient attention を組み込む
+    # train_util.replace_unet_modules(unet, args.mem_eff_attn, args.xformers, args.sdpa)
+    if args.xformers:
+        unet.set_use_memory_efficient_attention(True, False)
+        control_net.set_use_memory_efficient_attention(True, False)
+    elif args.sdpa:
+        unet.set_use_sdpa(True)
+        control_net.set_use_sdpa(True)
 
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
-        network.enable_gradient_checkpointing()  # may have no effect
+        control_net.enable_gradient_checkpointing()
 
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
 
-    trainable_params = list(network.prepare_optimizer_params())
-    logger.info(f"trainable params count: {len(trainable_params)}")
-    logger.info(f"number of trainable parameters: {sum(p.numel() for p in trainable_params if p.requires_grad)}")
+    trainable_params = []
+    ctrlnet_params = []
+    unet_params = []
+    for name, param in control_net.named_parameters():
+        if name.startswith("controlnet_"):
+            ctrlnet_params.append(param)
+        else:
+            unet_params.append(param)
+    trainable_params.append({"params": ctrlnet_params, "lr": args.control_net_lr})
+    trainable_params.append({"params": unet_params, "lr": args.learning_rate})
+    all_params = ctrlnet_params + unet_params
+
+    logger.info(f"trainable params count: {len(all_params)}")
+    logger.info(f"number of trainable parameters: {sum(p.numel() for p in all_params)}")
 
     _, _, optimizer = train_util.get_optimizer(args, trainable_params)
 
-    # dataloaderを準備する
+    # prepare dataloader
+    # strategies are set here because they cannot be referenced in another process. Copy them with the dataset
+    # some strategies can be None
+    train_dataset_group.set_current_strategies()
+
     # DataLoaderのプロセス数：0 は persistent_workers が使えないので注意
     n_workers = min(args.max_data_loader_n_workers, os.cpu_count())  # cpu_count or max_data_loader_n_workers
 
@@ -243,28 +305,43 @@ def train(args):
             args.mixed_precision == "fp16"
         ), "full_fp16 requires mixed precision='fp16' / full_fp16を使う場合はmixed_precision='fp16'を指定してください。"
         accelerator.print("enable full fp16 training.")
-        unet.to(weight_dtype)
-        network.to(weight_dtype)
+        control_net.to(weight_dtype)
     elif args.full_bf16:
         assert (
             args.mixed_precision == "bf16"
         ), "full_bf16 requires mixed precision='bf16' / full_bf16を使う場合はmixed_precision='bf16'を指定してください。"
         accelerator.print("enable full bf16 training.")
-        unet.to(weight_dtype)
-        network.to(weight_dtype)
+        control_net.to(weight_dtype)
 
     # acceleratorがなんかよろしくやってくれるらしい
-    unet, network, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, network, optimizer, train_dataloader, lr_scheduler
+    control_net, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        control_net, optimizer, train_dataloader, lr_scheduler
     )
-    network: control_net_lllite.ControlNetLLLite
 
-    if args.gradient_checkpointing:
-        unet.train()  # according to TI example in Diffusers, train is required -> これオリジナルのU-Netしたので本当は外せる
-    else:
-        unet.eval()
+    if args.fused_backward_pass:
+        # use fused optimizer for backward pass: other optimizers will be supported in the future
+        import library.adafactor_fused
 
-    network.prepare_grad_etc()
+        library.adafactor_fused.patch_adafactor_fused(optimizer)
+        for param_group in optimizer.param_groups:
+            for parameter in param_group["params"]:
+                if parameter.requires_grad:
+
+                    def __grad_hook(tensor: torch.Tensor, param_group=param_group):
+                        if accelerator.sync_gradients and args.max_grad_norm != 0.0:
+                            accelerator.clip_grad_norm_(tensor, args.max_grad_norm)
+                        optimizer.step_param(tensor, param_group)
+                        tensor.grad = None
+
+                    parameter.register_post_accumulate_grad_hook(__grad_hook)
+
+    unet.requires_grad_(False)
+    text_encoder1.requires_grad_(False)
+    text_encoder2.requires_grad_(False)
+    unet.to(accelerator.device, dtype=weight_dtype)
+
+    unet.eval()
+    control_net.train()
 
     # TextEncoderの出力をキャッシュするときにはCPUへ移動する
     if args.cache_text_encoder_outputs:
@@ -321,25 +398,42 @@ def train(args):
 
     if accelerator.is_main_process:
         init_kwargs = {}
+        if args.wandb_run_name:
+            init_kwargs["wandb"] = {"name": args.wandb_run_name}
         if args.log_tracker_config is not None:
             init_kwargs = toml.load(args.log_tracker_config)
         accelerator.init_trackers(
-            "lllite_control_net_train" if args.log_tracker_name is None else args.log_tracker_name, config=train_util.get_sanitized_config_or_none(args), init_kwargs=init_kwargs
+            ("sdxl_control_net_train" if args.log_tracker_name is None else args.log_tracker_name),
+            config=train_util.get_sanitized_config_or_none(args),
+            init_kwargs=init_kwargs,
         )
 
     loss_recorder = train_util.LossRecorder()
     del train_dataset_group
 
     # function for saving/removing
-    def save_model(ckpt_name, unwrapped_nw, steps, epoch_no, force_sync_upload=False):
+    def save_model(ckpt_name, model, force_sync_upload=False):
         os.makedirs(args.output_dir, exist_ok=True)
         ckpt_file = os.path.join(args.output_dir, ckpt_name)
 
         accelerator.print(f"\nsaving checkpoint: {ckpt_file}")
         sai_metadata = train_util.get_sai_model_spec(None, args, True, True, False)
-        sai_metadata["modelspec.architecture"] = sai_model_spec.ARCH_SD_XL_V1_BASE + "/control-net-lllite"
+        sai_metadata["modelspec.architecture"] = sai_model_spec.ARCH_SD_XL_V1_BASE + "/controlnet"
+        state_dict = model.state_dict()
 
-        unwrapped_nw.save_weights(ckpt_file, save_dtype, sai_metadata)
+        if save_dtype is not None:
+            for key in list(state_dict.keys()):
+                v = state_dict[key]
+                v = v.detach().clone().to("cpu").to(save_dtype)
+                state_dict[key] = v
+
+        if os.path.splitext(ckpt_file)[1] == ".safetensors":
+            from safetensors.torch import save_file
+
+            save_file(state_dict, ckpt_file, sai_metadata)
+        else:
+            torch.save(state_dict, ckpt_file)
+
         if args.huggingface_repo_id is not None:
             huggingface_util.upload(args, ckpt_file, "/" + ckpt_name, force_sync_upload=force_sync_upload)
 
@@ -349,16 +443,30 @@ def train(args):
             accelerator.print(f"removing old checkpoint: {old_ckpt_file}")
             os.remove(old_ckpt_file)
 
+    # For --sample_at_first
+    sdxl_train_util.sample_images(
+        accelerator,
+        args,
+        0,
+        global_step,
+        accelerator.device,
+        vae,
+        [tokenizer1, tokenizer2],
+        [text_encoder1, text_encoder2, unwrap_model(text_encoder2)],
+        unet,
+        controlnet=control_net,
+    )
+
     # training loop
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
         current_epoch.value = epoch + 1
 
-        network.on_epoch_start()  # train()
+        control_net.train()
 
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step
-            with accelerator.accumulate(network):
+            with accelerator.accumulate(control_net):
                 with torch.no_grad():
                     if "latents" in batch and batch["latents"] is not None:
                         latents = batch["latents"].to(accelerator.device).to(dtype=weight_dtype)
@@ -372,27 +480,25 @@ def train(args):
                             latents = torch.nan_to_num(latents, 0, out=latents)
                     latents = latents * sdxl_model_util.VAE_SCALE_FACTOR
 
-                if "text_encoder_outputs1_list" not in batch or batch["text_encoder_outputs1_list"] is None:
-                    input_ids1 = batch["input_ids"]
-                    input_ids2 = batch["input_ids2"]
+                text_encoder_outputs_list = batch.get("text_encoder_outputs_list", None)
+                if text_encoder_outputs_list is not None:
+                    # Text Encoder outputs are cached
+                    encoder_hidden_states1, encoder_hidden_states2, pool2 = text_encoder_outputs_list
+                    encoder_hidden_states1 = encoder_hidden_states1.to(accelerator.device, dtype=weight_dtype)
+                    encoder_hidden_states2 = encoder_hidden_states2.to(accelerator.device, dtype=weight_dtype)
+                    pool2 = pool2.to(accelerator.device, dtype=weight_dtype)
+                else:
+                    input_ids1, input_ids2 = batch["input_ids_list"]
                     with torch.no_grad():
-                        # Get the text embedding for conditioning
                         input_ids1 = input_ids1.to(accelerator.device)
                         input_ids2 = input_ids2.to(accelerator.device)
-                        encoder_hidden_states1, encoder_hidden_states2, pool2 = train_util.get_hidden_states_sdxl(
-                            args.max_token_length,
-                            input_ids1,
-                            input_ids2,
-                            tokenizer1,
-                            tokenizer2,
-                            text_encoder1,
-                            text_encoder2,
-                            None if not args.full_fp16 else weight_dtype,
+                        encoder_hidden_states1, encoder_hidden_states2, pool2 = text_encoding_strategy.encode_tokens(
+                            tokenize_strategy, [text_encoder1, text_encoder2, unwrap_model(text_encoder2)], [input_ids1, input_ids2]
                         )
-                else:
-                    encoder_hidden_states1 = batch["text_encoder_outputs1_list"].to(accelerator.device).to(weight_dtype)
-                    encoder_hidden_states2 = batch["text_encoder_outputs2_list"].to(accelerator.device).to(weight_dtype)
-                    pool2 = batch["text_encoder_pool2_list"].to(accelerator.device).to(weight_dtype)
+                        if args.full_fp16:
+                            encoder_hidden_states1 = encoder_hidden_states1.to(weight_dtype)
+                            encoder_hidden_states2 = encoder_hidden_states2.to(weight_dtype)
+                            pool2 = pool2.to(weight_dtype)
 
                 # get size embeddings
                 orig_size = batch["original_sizes_hw"]
@@ -406,19 +512,20 @@ def train(args):
 
                 # Sample noise, sample a random timestep for each image, and add noise to the latents,
                 # with noise offset and/or multires noise if specified
-                noise, noisy_latents, timesteps, huber_c = train_util.get_noise_noisy_latents_and_timesteps(args, noise_scheduler, latents)
-
-                noisy_latents = noisy_latents.to(weight_dtype)  # TODO check why noisy_latents is not weight_dtype
+                noise, noisy_latents, timesteps, huber_c = train_util.get_noise_noisy_latents_and_timesteps(
+                    args, noise_scheduler, latents
+                )
 
                 controlnet_image = batch["conditioning_images"].to(dtype=weight_dtype)
 
-                with accelerator.autocast():
-                    # conditioning imageをControlNetに渡す / pass conditioning image to ControlNet
-                    # 内部でcond_embに変換される / it will be converted to cond_emb inside
-                    network.set_cond_image(controlnet_image)
+                # '-1 to +1' to '0 to 1'
+                controlnet_image = (controlnet_image + 1) / 2
 
-                    # それらの値を使いつつ、U-Netでノイズを予測する / predict noise with U-Net using those values
-                    noise_pred = unet(noisy_latents, timesteps, text_embedding, vector_embedding)
+                with accelerator.autocast():
+                    input_resi_add, mid_add = control_net(
+                        noisy_latents, timesteps, text_embedding, vector_embedding, controlnet_image
+                    )
+                    noise_pred = unet(noisy_latents, timesteps, text_embedding, vector_embedding, input_resi_add, mid_add)
 
                 if args.v_parameterization:
                     # v-parameterization training
@@ -426,7 +533,9 @@ def train(args):
                 else:
                     target = noise
 
-                loss = train_util.conditional_loss(noise_pred.float(), target.float(), reduction="none", loss_type=args.loss_type, huber_c=huber_c)
+                loss = train_util.conditional_loss(
+                    noise_pred.float(), target.float(), reduction="none", loss_type=args.loss_type, huber_c=huber_c
+                )
                 loss = loss.mean([1, 2, 3])
 
                 loss_weights = batch["loss_weights"]  # 各sampleごとのweight
@@ -444,27 +553,42 @@ def train(args):
                 loss = loss.mean()  # 平均なのでbatch_sizeで割る必要なし
 
                 accelerator.backward(loss)
-                if accelerator.sync_gradients and args.max_grad_norm != 0.0:
-                    params_to_clip = network.get_trainable_params()
-                    accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                if not args.fused_backward_pass:
+                    if accelerator.sync_gradients and args.max_grad_norm != 0.0:
+                        params_to_clip = control_net.parameters()
+                        accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+                    optimizer.step()
+                    lr_scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
+                else:
+                    # optimizer.step() and optimizer.zero_grad() are called in the optimizer hook
+                    lr_scheduler.step()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 progress_bar.update(1)
                 global_step += 1
 
-                # sdxl_train_util.sample_images(accelerator, args, None, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
+                sdxl_train_util.sample_images(
+                    accelerator,
+                    args,
+                    None,
+                    global_step,
+                    accelerator.device,
+                    vae,
+                    [tokenizer1, tokenizer2],
+                    [text_encoder1, text_encoder2, unwrap_model(text_encoder2)],
+                    unet,
+                    controlnet=control_net,
+                )
 
                 # 指定ステップごとにモデルを保存
                 if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
                     accelerator.wait_for_everyone()
                     if accelerator.is_main_process:
                         ckpt_name = train_util.get_step_ckpt_name(args, "." + args.save_model_as, global_step)
-                        save_model(ckpt_name, accelerator.unwrap_model(network), global_step, epoch)
+                        save_model(ckpt_name, unwrap_model(control_net))
 
                         if args.save_state:
                             train_util.save_and_remove_state_stepwise(args, accelerator, global_step)
@@ -498,7 +622,7 @@ def train(args):
             saving = (epoch + 1) % args.save_every_n_epochs == 0 and (epoch + 1) < num_train_epochs
             if is_main_process and saving:
                 ckpt_name = train_util.get_epoch_ckpt_name(args, "." + args.save_model_as, epoch + 1)
-                save_model(ckpt_name, accelerator.unwrap_model(network), global_step, epoch + 1)
+                save_model(ckpt_name, unwrap_model(control_net))
 
                 remove_epoch_no = train_util.get_remove_epoch_no(args, epoch + 1)
                 if remove_epoch_no is not None:
@@ -508,21 +632,32 @@ def train(args):
                 if args.save_state:
                     train_util.save_and_remove_state_on_epoch_end(args, accelerator, epoch + 1)
 
-        # self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
+        sdxl_train_util.sample_images(
+            accelerator,
+            args,
+            epoch + 1,
+            global_step,
+            accelerator.device,
+            vae,
+            [tokenizer1, tokenizer2],
+            [text_encoder1, text_encoder2, unwrap_model(text_encoder2)],
+            unet,
+            controlnet=control_net,
+        )
 
         # end of epoch
 
     if is_main_process:
-        network = accelerator.unwrap_model(network)
+        control_net = unwrap_model(control_net)
 
     accelerator.end_training()
 
-    if is_main_process and args.save_state:
+    if is_main_process and (args.save_state or args.save_state_on_train_end):
         train_util.save_state_on_train_end(args, accelerator)
 
     if is_main_process:
         ckpt_name = train_util.get_last_ckpt_name(args, "." + args.save_model_as)
-        save_model(ckpt_name, network, global_step, num_train_epochs, force_sync_upload=True)
+        save_model(ckpt_name, control_net, force_sync_upload=True)
 
         logger.info("model saved.")
 
@@ -534,31 +669,19 @@ def setup_parser() -> argparse.ArgumentParser:
     train_util.add_sd_models_arguments(parser)
     train_util.add_dataset_arguments(parser, False, True, True)
     train_util.add_training_arguments(parser, False)
+    # train_util.add_masked_loss_arguments(parser)
     deepspeed_utils.add_deepspeed_arguments(parser)
+    # train_util.add_sd_saving_arguments(parser)
     train_util.add_optimizer_arguments(parser)
     config_util.add_config_arguments(parser)
     custom_train_functions.add_custom_train_arguments(parser)
     sdxl_train_util.add_sdxl_training_arguments(parser)
 
     parser.add_argument(
-        "--save_model_as",
+        "--controlnet_model_path",
         type=str,
-        default="safetensors",
-        choices=[None, "ckpt", "pt", "safetensors"],
-        help="format to save the model (default is .safetensors) / モデル保存時の形式（デフォルトはsafetensors）",
-    )
-    parser.add_argument(
-        "--cond_emb_dim", type=int, default=None, help="conditioning embedding dimension / 条件付け埋め込みの次元数"
-    )
-    parser.add_argument(
-        "--network_weights", type=str, default=None, help="pretrained weights for network / 学習するネットワークの初期重み"
-    )
-    parser.add_argument("--network_dim", type=int, default=None, help="network dimensions (rank) / モジュールの次元数")
-    parser.add_argument(
-        "--network_dropout",
-        type=float,
         default=None,
-        help="Drops neurons out of training every step (0 or None is default behavior (no dropout), 1 would drop all neurons) / 訓練時に毎ステップでニューロンをdropする（0またはNoneはdropoutなし、1は全ニューロンをdropout）",
+        help="controlnet model name or path / controlnetのモデル名またはパス",
     )
     parser.add_argument(
         "--conditioning_data_dir",
@@ -567,9 +690,22 @@ def setup_parser() -> argparse.ArgumentParser:
         help="conditioning data directory / 条件付けデータのディレクトリ",
     )
     parser.add_argument(
+        "--save_model_as",
+        type=str,
+        default="safetensors",
+        choices=[None, "ckpt", "pt", "safetensors"],
+        help="format to save the model (default is .safetensors) / モデル保存時の形式（デフォルトはsafetensors）",
+    )
+    parser.add_argument(
         "--no_half_vae",
         action="store_true",
         help="do not use fp16/bf16 VAE in mixed precision (use float VAE) / mixed precisionでも fp16/bf16 VAEを使わずfloat VAEを使う",
+    )
+    parser.add_argument(
+        "--control_net_lr",
+        type=float,
+        default=1e-4,
+        help="learning rate for controlnet / controlnetの学習率",
     )
     return parser
 
