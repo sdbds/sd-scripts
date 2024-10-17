@@ -3,6 +3,7 @@
 import argparse
 import ast
 import asyncio
+from concurrent.futures import Future, ThreadPoolExecutor
 import datetime
 import importlib
 import json
@@ -32,8 +33,10 @@ import subprocess
 from io import BytesIO
 import toml
 
+# from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from tqdm import tqdm
-from scipy.optimize import linear_sum_assignment
+from packaging.version import Version
 
 import torch
 from library.device_utils import init_ipex, clean_memory_on_device
@@ -75,6 +78,7 @@ import imagesize
 import cv2
 import safetensors.torch
 from library.lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
+from library.sdxl_lpw_stable_diffusion import SdxlStableDiffusionLongPromptWeightingPipeline
 import library.model_util as model_util
 import library.hunyuan_utils as hunyuan_utils
 import library.huggingface_util as huggingface_util
@@ -927,6 +931,23 @@ class BaseDataset(torch.utils.data.Dataset):
             if info.image_size is None:
                 info.image_size = self.get_image_size(info.absolute_path)
 
+        # # run in parallel
+        # max_workers = min(os.cpu_count(), len(self.image_data))  # TODO consider multi-gpu (processes)
+        # with ThreadPoolExecutor(max_workers) as executor:
+        #     futures = []
+        #     for info in tqdm(self.image_data.values(), desc="loading image sizes"):
+        #         if info.image_size is None:
+        #             def get_and_set_image_size(info):
+        #                 info.image_size = self.get_image_size(info.absolute_path)
+        #             futures.append(executor.submit(get_and_set_image_size, info))
+        #             # consume futures to reduce memory usage and prevent Ctrl-C hang
+        #             if len(futures) >= max_workers:
+        #                 for future in futures:
+        #                     future.result()
+        #                 futures = []
+        #     for future in futures:
+        #         future.result()
+
         if self.enable_bucket:
             logger.info("make buckets")
         else:
@@ -1025,7 +1046,7 @@ class BaseDataset(torch.utils.data.Dataset):
             ]
         )
 
-    def new_cache_latents(self, model: Any, is_main_process: bool):
+    def new_cache_latents(self, model: Any, accelerator: Accelerator):
         r"""
         a brand new method to cache latents. This method caches latents with caching strategy.
         normal cache_latents method is used by default, but this method is used when caching strategy is specified.
@@ -1053,60 +1074,77 @@ class BaseDataset(torch.utils.data.Dataset):
                     and self.random_crop == other.random_crop
                 )
 
-        batches: List[Tuple[Condition, List[ImageInfo]]] = []
         batch: List[ImageInfo] = []
         current_condition = None
 
-        logger.info("checking cache validity...")
-        for info in tqdm(image_infos):
-            subset = self.image_to_subset[info.image_key]
+        # support multiple-gpus
+        num_processes = accelerator.num_processes
+        process_index = accelerator.process_index
 
-            if info.latents_npz is not None:  # fine tuning dataset
-                continue
+        # define a function to submit a batch to cache
+        def submit_batch(batch, cond):
+            for info in batch:
+                if info.image is not None and isinstance(info.image, Future):
+                    info.image = info.image.result()  # future to image
+            caching_strategy.cache_batch_latents(model, batch, cond.flip_aug, cond.alpha_mask, cond.random_crop)
 
-            # check disk cache exists and size of latents
-            if caching_strategy.cache_to_disk:
-                # info.latents_npz = os.path.splitext(info.absolute_path)[0] + file_suffix
-                info.latents_npz = caching_strategy.get_latents_npz_path(info.absolute_path, info.image_size)
-                if not is_main_process:  # prepare for multi-gpu, only store to info
+        # define ThreadPoolExecutor to load images in parallel
+        max_workers = min(os.cpu_count(), len(image_infos))
+        max_workers = max(1, max_workers // num_processes)  # consider multi-gpu
+        max_workers = min(max_workers, caching_strategy.batch_size)  # max_workers should be less than batch_size
+        executor = ThreadPoolExecutor(max_workers)
+
+        try:
+            # iterate images
+            logger.info("caching latents...")
+            for i, info in enumerate(tqdm(image_infos)):
+                subset = self.image_to_subset[info.image_key]
+
+                if info.latents_npz is not None:  # fine tuning dataset
                     continue
 
-                cache_available = caching_strategy.is_disk_cached_latents_expected(
-                    info.bucket_reso, info.latents_npz, subset.flip_aug, subset.alpha_mask
-                )
-                if cache_available:  # do not add to batch
-                    continue
+                # check disk cache exists and size of latents
+                if caching_strategy.cache_to_disk:
+                    # info.latents_npz = os.path.splitext(info.absolute_path)[0] + file_suffix
+                    info.latents_npz = caching_strategy.get_latents_npz_path(info.absolute_path, info.image_size)
 
-            # if batch is not empty and condition is changed, flush the batch. Note that current_condition is not None if batch is not empty
-            condition = Condition(info.bucket_reso, subset.flip_aug, subset.alpha_mask, subset.random_crop)
-            if len(batch) > 0 and current_condition != condition:
-                batches.append((current_condition, batch))
-                batch = []
+                    # if the modulo of num_processes is not equal to process_index, skip caching
+                    # this makes each process cache different latents
+                    if i % num_processes != process_index:
+                        continue
 
-            batch.append(info)
-            current_condition = condition
+                    # print(f"{process_index}/{num_processes} {i}/{len(image_infos)} {info.latents_npz}")
 
-            # if number of data in batch is enough, flush the batch
-            if len(batch) >= caching_strategy.batch_size:
-                batches.append((current_condition, batch))
-                batch = []
-                current_condition = None
+                    cache_available = caching_strategy.is_disk_cached_latents_expected(
+                        info.bucket_reso, info.latents_npz, subset.flip_aug, subset.alpha_mask
+                    )
+                    if cache_available:  # do not add to batch
+                        continue
 
-        if len(batch) > 0:
-            batches.append((current_condition, batch))
+                # if batch is not empty and condition is changed, flush the batch. Note that current_condition is not None if batch is not empty
+                condition = Condition(info.bucket_reso, subset.flip_aug, subset.alpha_mask, subset.random_crop)
+                if len(batch) > 0 and current_condition != condition:
+                    submit_batch(batch, current_condition)
+                    batch = []
 
-        # if cache to disk, don't cache latents in non-main process, set to info only
-        if caching_strategy.cache_to_disk and not is_main_process:
-            return
+                if info.image is None:
+                    # load image in parallel
+                    info.image = executor.submit(load_image, info.absolute_path, condition.alpha_mask)
 
-        if len(batches) == 0:
-            logger.info("no latents to cache")
-            return
+                batch.append(info)
+                current_condition = condition
 
-        # iterate batches: batch doesn't have image here. image will be loaded in cache_batch_latents and discarded
-        logger.info("caching latents...")
-        for condition, batch in tqdm(batches, smoothing=1, total=len(batches)):
-            caching_strategy.cache_batch_latents(model, batch, condition.flip_aug, condition.alpha_mask, condition.random_crop)
+                # if number of data in batch is enough, flush the batch
+                if len(batch) >= caching_strategy.batch_size:
+                    submit_batch(batch, current_condition)
+                    batch = []
+                    current_condition = None
+
+            if len(batch) > 0:
+                submit_batch(batch, current_condition)
+
+        finally:
+            executor.shutdown()
 
     def cache_latents(self, vae, vae_batch_size=1, cache_to_disk=False, is_main_process=True, file_suffix=".npz"):
         # マルチGPUには対応していないので、そちらはtools/cache_latents.pyを使うこと
@@ -1183,7 +1221,7 @@ class BaseDataset(torch.utils.data.Dataset):
         for condition, batch in tqdm(batches, smoothing=1, total=len(batches)):
             cache_batch_latents(vae, cache_to_disk, batch, condition.flip_aug, condition.alpha_mask, condition.random_crop)
 
-    def new_cache_text_encoder_outputs(self, models: List[Any], is_main_process: bool):
+    def new_cache_text_encoder_outputs(self, models: List[Any], accelerator: Accelerator):
         r"""
         a brand new method to cache text encoder outputs. This method caches text encoder outputs with caching strategy.
         """
@@ -1198,15 +1236,25 @@ class BaseDataset(torch.utils.data.Dataset):
         # split by resolution
         batches = []
         batch = []
-        logger.info("checking cache validity...")
-        for info in tqdm(image_infos):
-            te_out_npz = caching_strategy.get_outputs_npz_path(info.absolute_path)
 
-            # check disk cache exists and size of latents
+        # support multiple-gpus
+        num_processes = accelerator.num_processes
+        process_index = accelerator.process_index
+
+        logger.info("checking cache validity...")
+        for i, info in enumerate(tqdm(image_infos)):
+            # check disk cache exists and size of text encoder outputs
             if caching_strategy.cache_to_disk:
-                info.text_encoder_outputs_npz = te_out_npz  # set npz filename regardless of cache availability/main process
+                te_out_npz = caching_strategy.get_outputs_npz_path(info.absolute_path)
+                info.text_encoder_outputs_npz = te_out_npz  # set npz filename regardless of cache availability
+
+                # if the modulo of num_processes is not equal to process_index, skip caching
+                # this makes each process cache different text encoder outputs
+                if i % num_processes != process_index:
+                    continue
+
                 cache_available = caching_strategy.is_disk_cached_outputs_expected(te_out_npz)
-                if cache_available or not is_main_process:  # do not add to batch
+                if cache_available:  # do not add to batch
                     continue
 
             batch.append(info)
@@ -1824,9 +1872,30 @@ class DreamBoothDataset(BaseDataset):
                 strategy = LatentsCachingStrategy.get_strategy()
                 if strategy is not None:
                     logger.info("get image size from name of cache files")
+
+                    # make image path to npz path mapping
+                    npz_paths = glob.glob(os.path.join(subset.image_dir, "*" + strategy.cache_suffix))
+                    npz_paths.sort()
+                    npz_path_index = 0
+
                     size_set_count = 0
                     for i, img_path in enumerate(tqdm(img_paths)):
-                        w, h = strategy.get_image_size_from_disk_cache_path(img_path)
+                        l = len(os.path.splitext(img_path)[0])  # remove extension
+                        found = False
+                        while npz_path_index < len(npz_paths):  # until found or end of npz_paths
+                            # npz_paths are sorted, so if npz_path > img_path, img_path is not found
+                            if npz_paths[npz_path_index][:l] > img_path[:l]:
+                                break
+                            if npz_paths[npz_path_index][:l] == img_path[:l]:  # found
+                                found = True
+                                break
+                            npz_path_index += 1  # next npz_path
+
+                        if found:
+                            w, h = strategy.get_image_size_from_disk_cache_path(img_path, npz_paths[npz_path_index])
+                        else:
+                            w, h = None, None
+
                         if w is not None and h is not None:
                             sizes[i] = [w, h]
                             size_set_count += 1
@@ -1841,7 +1910,7 @@ class DreamBoothDataset(BaseDataset):
                 # 画像ファイルごとにプロンプトを読み込み、もしあればそちらを使う
                 captions = []
                 missing_captions = []
-                for img_path in img_paths:
+                for img_path in tqdm(img_paths, desc="read caption"):
                     cap_for_img = read_caption(img_path, subset.caption_extension, subset.enable_wildcard)
                     if cap_for_img is None and subset.class_tokens is None:
                         logger.warning(
@@ -2302,8 +2371,8 @@ class ControlNetDataset(BaseDataset):
     def cache_latents(self, vae, vae_batch_size=1, cache_to_disk=False, is_main_process=True, file_suffix=".npz"):
         return self.dreambooth_dataset_delegate.cache_latents(vae, vae_batch_size, cache_to_disk, is_main_process, file_suffix)
 
-    def new_cache_latents(self, model: Any, is_main_process: bool):
-        return self.dreambooth_dataset_delegate.new_cache_latents(model, is_main_process)
+    def new_cache_latents(self, model: Any, accelerator: Accelerator):
+        return self.dreambooth_dataset_delegate.new_cache_latents(model, accelerator)
 
     def new_cache_text_encoder_outputs(self, models: List[Any], is_main_process: bool):
         return self.dreambooth_dataset_delegate.new_cache_text_encoder_outputs(models, is_main_process)
@@ -2407,10 +2476,11 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
             logger.info(f"[Dataset {i}]")
             dataset.cache_latents(vae, vae_batch_size, cache_to_disk, is_main_process, file_suffix)
 
-    def new_cache_latents(self, model: Any, is_main_process: bool):
+    def new_cache_latents(self, model: Any, accelerator: Accelerator):
         for i, dataset in enumerate(self.datasets):
             logger.info(f"[Dataset {i}]")
-            dataset.new_cache_latents(model, is_main_process)
+            dataset.new_cache_latents(model, accelerator)
+        accelerator.wait_for_everyone()
 
     def cache_text_encoder_outputs(
         self, tokenizers, text_encoders, device, weight_dtype, cache_to_disk=False, is_main_process=True
@@ -2428,10 +2498,11 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
                 tokenizer, text_encoders, device, output_dtype, te_dtypes, cache_to_disk, is_main_process, batch_size
             )
 
-    def new_cache_text_encoder_outputs(self, models: List[Any], is_main_process: bool):
+    def new_cache_text_encoder_outputs(self, models: List[Any], accelerator: Accelerator):
         for i, dataset in enumerate(self.datasets):
             logger.info(f"[Dataset {i}]")
-            dataset.new_cache_text_encoder_outputs(models, is_main_process)
+            dataset.new_cache_text_encoder_outputs(models, accelerator)
+        accelerator.wait_for_everyone()
 
     def set_caching_mode(self, caching_mode):
         for dataset in self.datasets:
@@ -3653,7 +3724,20 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         # available backends:
         # https://github.com/huggingface/accelerate/blob/d1abd59114ada8ba673e1214218cb2878c13b82d/src/accelerate/utils/dataclasses.py#L376-L388C5
         # https://pytorch.org/docs/stable/torch.compiler.html
-        choices=["eager", "aot_eager", "inductor", "aot_ts_nvfuser", "nvprims_nvfuser", "cudagraphs", "ofi", "fx2trt", "onnxrt", "tensort", "ipex", "tvm"],
+        choices=[
+            "eager",
+            "aot_eager",
+            "inductor",
+            "aot_ts_nvfuser",
+            "nvprims_nvfuser",
+            "cudagraphs",
+            "ofi",
+            "fx2trt",
+            "onnxrt",
+            "tensort",
+            "ipex",
+            "tvm",
+        ],
         help="dynamo backend type (default is inductor) / dynamoのbackendの種類（デフォルトは inductor）",
     )
     parser.add_argument("--xformers", action="store_true", help="use xformers for CrossAttention / CrossAttentionにxformersを使う")
@@ -4079,15 +4163,18 @@ def verify_command_line_training_args(args: argparse.Namespace):
         )
 
 
+def enable_high_vram(args: argparse.Namespace):
+    if args.highvram:
+        logger.info("highvram is enabled / highvramが有効です")
+        global HIGH_VRAM
+        HIGH_VRAM = True
+
 def verify_training_args(args: argparse.Namespace):
     r"""
     Verify training arguments. Also reflect highvram option to global variable
     学習用引数を検証する。あわせて highvram オプションの指定をグローバル変数に反映する
     """
-    if args.highvram:
-        print("highvram is enabled / highvramが有効です")
-        global HIGH_VRAM
-        HIGH_VRAM = True
+    enable_high_vram(args)
 
     if args.v_parameterization and not args.v2:
         logger.warning(
@@ -4256,6 +4343,12 @@ def add_dataset_arguments(
         "--cache_latents_to_disk",
         action="store_true",
         help="cache latents to disk to reduce VRAM usage (augmentations must be disabled) / VRAM削減のためにlatentをディスクにcacheする（augmentationは使用不可）",
+    )
+    parser.add_argument(
+        "--skip_cache_check",
+        action="store_true",
+        help="skip the content validation of cache (latent and text encoder output). Cache file existence check is always performed, and cache processing is performed if the file does not exist"
+        " / cacheの内容の検証をスキップする（latentとテキストエンコーダの出力）。キャッシュファイルの存在確認は常に行われ、ファイルがなければキャッシュ処理が行われる",
     )
     parser.add_argument(
         "--enable_bucket",
@@ -5245,8 +5338,18 @@ def prepare_accelerator(args: argparse.Namespace):
     if args.torch_compile:
         dynamo_backend = args.dynamo_backend
 
-    kwargs_handlers = (
-        InitProcessGroupKwargs(timeout=datetime.timedelta(minutes=args.ddp_timeout)) if args.ddp_timeout else None,
+    kwargs_handlers = [
+        (
+            InitProcessGroupKwargs(
+                backend="gloo" if os.name == "nt" or not torch.cuda.is_available() else "nccl",
+                init_method=(
+                    "env://?use_libuv=False" if os.name == "nt" and Version(torch.__version__) >= Version("2.4.0") else None
+                ),
+                timeout=datetime.timedelta(minutes=args.ddp_timeout) if args.ddp_timeout else None,
+            )
+            if torch.cuda.device_count() > 1
+            else None
+        ),
         (
             DistributedDataParallelKwargs(
                 gradient_as_bucket_view=args.ddp_gradient_as_bucket_view, static_graph=args.ddp_static_graph
@@ -5254,8 +5357,8 @@ def prepare_accelerator(args: argparse.Namespace):
             if args.ddp_gradient_as_bucket_view or args.ddp_static_graph
             else None
         ),
-    )
-    kwargs_handlers = list(filter(lambda x: x is not None, kwargs_handlers))
+    ]
+    kwargs_handlers = [i for i in kwargs_handlers if i is not None]
     deepspeed_plugin = deepspeed_utils.prepare_deepspeed_plugin(args)
 
     accelerator = Accelerator(
@@ -6085,8 +6188,8 @@ def sample_images_common(
     pipe_class,
     accelerator: Accelerator,
     args: argparse.Namespace,
-    epoch,
-    steps,
+    epoch: int,
+    steps: int,
     device,
     vae,
     tokenizer,
@@ -6145,11 +6248,7 @@ def sample_images_common(
         with open(args.sample_prompts, "r", encoding="utf-8") as f:
             prompts = json.load(f)
 
-    # schedulers: dict = {}  cannot find where this is used
-    default_scheduler = get_my_scheduler(
-        sample_sampler=args.sample_sampler,
-        v_parameterization=args.v_parameterization,
-    )
+    default_scheduler = get_my_scheduler(sample_sampler=args.sample_sampler, v_parameterization=args.v_parameterization)
 
     pipeline = pipe_class(
         text_encoder=text_encoder,
@@ -6210,21 +6309,18 @@ def sample_images_common(
     # clear pipeline and cache to reduce vram usage
     del pipeline
 
-    # I'm not sure which of these is the correct way to clear the memory, but accelerator's device is used in the pipeline, so I'm using it here.
-    # with torch.cuda.device(torch.cuda.current_device()):
-    #     torch.cuda.empty_cache()
-    clean_memory_on_device(accelerator.device)
-
     torch.set_rng_state(rng_state)
     if torch.cuda.is_available() and cuda_rng_state is not None:
         torch.cuda.set_rng_state(cuda_rng_state)
     vae.to(org_vae_device)
 
+    clean_memory_on_device(accelerator.device)
+
 
 def sample_image_inference(
     accelerator: Accelerator,
     args: argparse.Namespace,
-    pipeline,
+    pipeline: Union[StableDiffusionLongPromptWeightingPipeline, SdxlStableDiffusionLongPromptWeightingPipeline],
     save_dir,
     prompt_dict,
     epoch,
