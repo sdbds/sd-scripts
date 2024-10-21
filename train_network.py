@@ -128,7 +128,7 @@ class NetworkTrainer:
 
     def get_latents_caching_strategy(self, args):
         latents_caching_strategy = strategy_sd.SdSdxlLatentsCachingStrategy(
-            True, args.cache_latents_to_disk, args.vae_batch_size, args.skip_cache_check
+            True, args.cache_latents_to_disk, args.vae_batch_size, False
         )
         return latents_caching_strategy
 
@@ -358,6 +358,9 @@ class NetworkTrainer:
         ds_for_collator = train_dataset_group if args.max_data_loader_n_workers == 0 else None
         collator = train_util.collator_class(current_epoch, current_step, ds_for_collator)
 
+        if args.no_token_padding:
+            train_dataset_group.disable_token_padding()
+
         if args.debug_dataset:
             train_dataset_group.set_current_strategies()  # dasaset needs to know the strategies explicitly
             train_util.debug_dataset(train_dataset_group)
@@ -418,7 +421,7 @@ class NetworkTrainer:
             vae.requires_grad_(False)
             vae.eval()
 
-            train_dataset_group.new_cache_latents(vae, accelerator)
+            train_dataset_group.new_cache_latents(vae, accelerator.is_main_process)
 
             vae.to("cpu")
             clean_memory_on_device(accelerator.device)
@@ -1205,8 +1208,8 @@ class NetworkTrainer:
                                     self.get_models_for_text_encoding(args, accelerator, text_encoders),
                                     input_ids,
                                 )
-                            if args.full_fp16:
-                                encoded_text_encoder_conds = [c.to(weight_dtype) for c in encoded_text_encoder_conds]
+                                if args.full_fp16:
+                                    encoded_text_encoder_conds = [c.to(weight_dtype, non_blocking=True) for c in encoded_text_encoder_conds]
 
                         # if text_encoder_conds is not cached, use encoded_text_encoder_conds
                         if len(text_encoder_conds) == 0:
@@ -1457,6 +1460,11 @@ def setup_parser() -> argparse.ArgumentParser:
         default=None,
         nargs="*",
         help="additional arguments for network (key=value) / ネットワークへの追加の引数",
+    )
+    parser.add_argument(
+        "--no_token_padding",
+        action="store_true",
+        help="disable token padding (same as Diffuser's DreamBooth) / トークンのpaddingを無効にする（Diffusers版DreamBoothと同じ動作）",
     )
     parser.add_argument(
         "--network_train_unet_only", action="store_true", help="only training U-Net part / U-Net関連部分のみ学習する"

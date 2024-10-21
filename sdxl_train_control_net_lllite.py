@@ -95,7 +95,7 @@ def train(args):
 
     # prepare caching strategy: this must be set before preparing dataset. because dataset may use this strategy for initialization.
     latents_caching_strategy = strategy_sd.SdSdxlLatentsCachingStrategy(
-        False, args.cache_latents_to_disk, args.vae_batch_size, args.skip_cache_check
+        False, args.cache_latents_to_disk, args.vae_batch_size, False
     )
     strategy_base.LatentsCachingStrategy.set_strategy(latents_caching_strategy)
 
@@ -204,7 +204,7 @@ def train(args):
         text_encoder1.to(accelerator.device)
         text_encoder2.to(accelerator.device)
         with accelerator.autocast():
-            train_dataset_group.new_cache_text_encoder_outputs([text_encoder1, text_encoder2], accelerator)
+            train_dataset_group.new_cache_text_encoder_outputs([text_encoder1, text_encoder2], accelerator.is_main_process)
 
         accelerator.wait_for_everyone()
 
@@ -445,6 +445,7 @@ def train(args):
                             accelerator.print("NaN found in latents, replacing with zeros")
                             latents = torch.nan_to_num(latents, 0, out=latents)
                     latents = latents * sdxl_model_util.VAE_SCALE_FACTOR
+
 
                 text_encoder_outputs_list = batch.get("text_encoder_outputs_list", None)
                 if text_encoder_outputs_list is not None:
