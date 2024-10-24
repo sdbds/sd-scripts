@@ -128,7 +128,7 @@ class NetworkTrainer:
 
     def get_latents_caching_strategy(self, args):
         latents_caching_strategy = strategy_sd.SdSdxlLatentsCachingStrategy(
-            True, args.cache_latents_to_disk, args.vae_batch_size, False
+            True, args.cache_latents_to_disk, args.vae_batch_size, args.skip_cache_check
         )
         return latents_caching_strategy
 
@@ -421,7 +421,7 @@ class NetworkTrainer:
             vae.requires_grad_(False)
             vae.eval()
 
-            train_dataset_group.new_cache_latents(vae, accelerator.is_main_process)
+            train_dataset_group.new_cache_latents(vae, accelerator)
 
             vae.to("cpu")
             clean_memory_on_device(accelerator.device)
@@ -1208,8 +1208,8 @@ class NetworkTrainer:
                                     self.get_models_for_text_encoding(args, accelerator, text_encoders),
                                     input_ids,
                                 )
-                                if args.full_fp16:
-                                    encoded_text_encoder_conds = [c.to(weight_dtype, non_blocking=True) for c in encoded_text_encoder_conds]
+                            if args.full_fp16:
+                                encoded_text_encoder_conds = [c.to(weight_dtype) for c in encoded_text_encoder_conds]
 
                         # if text_encoder_conds is not cached, use encoded_text_encoder_conds
                         if len(text_encoder_conds) == 0:
