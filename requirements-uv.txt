@@ -205,6 +205,8 @@ pillow==10.2.0
     # via
     #   diffusers
     #   torchvision
+pillow-avif-plugin==1.4.6
+    # via -r ./requirements.txt
 platformdirs==4.3.2
     # via wandb
 prodigyopt==1.0

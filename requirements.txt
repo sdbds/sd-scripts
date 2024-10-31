@@ -12,6 +12,7 @@ lion-pytorch
 scipy
 dadaptation
 wandb
+pillow-avif-plugin
 schedulefree==1.2.7
 torch-optimi==0.2.1
 adam-mini==1.0.1
