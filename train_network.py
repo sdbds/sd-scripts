@@ -469,7 +469,7 @@ class NetworkTrainer:
             )
         if network is None:
             return
-        network_has_multiplier = hasattr(network, "set_multiplier") and args.network_multiplier is not 1.0
+        network_has_multiplier = hasattr(network, "set_multiplier") and args.network_multiplier != 1.0
 
         if hasattr(network, "prepare_network"):
             network.prepare_network(args)
