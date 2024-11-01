@@ -811,7 +811,7 @@ def train(args):
     progress_bar = tqdm(range(args.max_train_steps), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps")
     global_step = 0
 
-    noise_scheduler = sd3_train_utils.FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=3.0)
+    noise_scheduler = sd3_train_utils.FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=3.0, sigma_max_scale=args.sigma_max_scale)
     noise_scheduler_copy = copy.deepcopy(noise_scheduler)
 
     if accelerator.is_main_process:
@@ -1177,12 +1177,6 @@ def setup_parser() -> argparse.ArgumentParser:
         "Increasing this number lowers the overall VRAM used during training at the expense of training speed (s/it)."
         " / 順伝播および逆伝播中にスワップするブロック（約640MB）の数を設定します。"
         "この数を増やすと、トレーニング中のVRAM使用量が減りますが、トレーニング速度（s/it）も低下します。",
-    )
-    parser.add_argument(
-        "--num_last_block_to_freeze",
-        type=int,
-        default=None,
-        help="freeze last n blocks of MM-DIT / MM-DITの最後のnブロックを凍結する",
     )
     return parser
 

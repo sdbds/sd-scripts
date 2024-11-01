@@ -3444,7 +3444,7 @@ def add_sd_models_arguments(parser: argparse.ArgumentParser):
         "--num_last_block_to_freeze",
         type=int,
         default=None,
-        help="num_last_block_to_freeze",
+        help="freeze last n blocks of MM-DIT / MM-DITの最後のnブロックを凍結する",
     )
 
 

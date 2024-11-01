@@ -276,7 +276,7 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
 
     def get_noise_scheduler(self, args: argparse.Namespace, device: torch.device) -> Any:
         # shift 3.0 is the default value
-        noise_scheduler = sd3_train_utils.FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=3.0)
+        noise_scheduler = sd3_train_utils.FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=3.0, sigma_max_scale=args.sigma_max_scale)
         self.noise_scheduler_copy = copy.deepcopy(noise_scheduler)
         return noise_scheduler
 

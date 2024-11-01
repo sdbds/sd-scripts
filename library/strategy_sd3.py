@@ -94,7 +94,7 @@ class Sd3TextEncodingStrategy(TextEncodingStrategy):
         # dropout: if enable_dropout is False, dropout is not applied. dropout means zeroing out embeddings
 
         if l_tokens is None or clip_l is None:
-            assert g_tokens is None, "g_tokens must be None if l_tokens is None"
+            #assert g_tokens is None, "g_tokens must be None if l_tokens is None"
             lg_out = None
             lg_pooled = None
             l_attn_mask = None

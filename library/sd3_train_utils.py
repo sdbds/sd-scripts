@@ -252,6 +252,13 @@ def add_sd3_training_arguments(parser: argparse.ArgumentParser):
         help="Scale position embeddings for each resolution during multi-resolution training. Only for SD3.5M"
         " / 複数解像度学習時に解像度ごとに位置埋め込みをスケーリングする。SD3.5M以外では予期しない動作になります",
     )
+    parser.add_argument(
+        "--sigma_max_scale",
+        type=float,
+        default=1.0,
+        help="Scale factor for sigma max. Only for SD3"
+        " / 位置埋め込みのスケールファクター。SD3以外では予期しない動作になります",
+    )
 
     # copy from Diffusers
     parser.add_argument(
@@ -688,12 +695,15 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         self,
         num_train_timesteps: int = 1000,
         shift: float = 1.0,
+        sigma_max_scale: float = 1.0,
     ):
         timesteps = np.linspace(1, num_train_timesteps, num_train_timesteps, dtype=np.float32)[::-1].copy()
         timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32)
 
         sigmas = timesteps / num_train_timesteps
         sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)
+
+        sigmas = sigmas * sigma_max_scale
 
         self.timesteps = sigmas * num_train_timesteps
 
