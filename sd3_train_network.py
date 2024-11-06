@@ -329,13 +329,8 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
             # TODO support attention mask
             model_pred = unet(noisy_model_input, timesteps, context=context, y=lg_pooled)
 
-        # Follow: Section 5 of https://arxiv.org/abs/2206.00364.
-        # Preconditioning of the model outputs.
-        model_pred = model_pred * (-sigmas) + noisy_model_input
-
-        # these weighting schemes use a uniform timestep sampling
-        # and instead post-weight the loss
-        weighting = sd3_train_utils.compute_loss_weighting_for_sd3(weighting_scheme=args.weighting_scheme, sigmas=sigmas)
+        # apply model prediction type
+        model_pred, weighting = flux_train_utils.apply_model_prediction_type(args, model_pred, noisy_model_input, sigmas)
 
         # flow matching loss
         target = latents
