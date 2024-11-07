@@ -1016,7 +1016,7 @@ def get_noisy_model_input_and_timesteps(args, latents, noise, device, dtype) -> 
             y1=0.5,
             y2=1.15,
         )((h // 2) * (w // 2))
-        u = flux_train_utils.time_shift(mu, 1.0, u)
+        u = flux_train_utils.time_shift(mu, args.sigma_max_scale, u)
     else:
         shift = args.training_shift
 
