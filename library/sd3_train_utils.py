@@ -260,12 +260,12 @@ def add_sd3_training_arguments(parser: argparse.ArgumentParser):
         " / 位置埋め込みのスケールファクター。SD3以外では予期しない動作になります",
     )
 
-    # copy from Diffusers
+    # Dependencies of Diffusers noise sampler has been removed for clarity.
     parser.add_argument(
         "--weighting_scheme",
         type=str,
-        default="logit_normal",
-        choices=["sigma_sqrt", "logit_normal", "mode", "cosmap", "none"],
+        default="uniform",
+        choices=["sigma_sqrt", "logit_normal", "mode", "cosmap", "uniform"],
         help="weighting scheme for timestep distribution and loss / タイムステップ分布と損失のための重み付けスキーム",
     )
     parser.add_argument(
@@ -287,32 +287,10 @@ def add_sd3_training_arguments(parser: argparse.ArgumentParser):
         help="Scale of mode weighting scheme. Only effective when using the `'mode'` as the `weighting_scheme`. / モード重み付けスキームのスケール。`'mode'`を`weighting_scheme`として使用する場合のみ有効",
     )
     parser.add_argument(
-        "--timestep_sampling",
-        choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift"],
-        default="sigma",
-        help="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid and FLUX.1 shifting."
-        " / タイムステップをサンプリングする方法：sigma、random uniform、random normalのsigmoid、sigmoidのシフト、FLUX.1のシフト。",
-    )
-    parser.add_argument(
-        "--sigmoid_scale",
+        "--training_shift",
         type=float,
         default=1.0,
-        help='Scale factor for sigmoid timestep sampling (only used when timestep-sampling is "sigmoid"). / sigmoidタイムステップサンプリングの倍率（timestep-samplingが"sigmoid"の場合のみ有効）。',
-    )
-    parser.add_argument(
-        "--model_prediction_type",
-        choices=["raw", "additive", "sigma_scaled"],
-        default="sigma_scaled",
-        help="How to interpret and process the model prediction: "
-        "raw (use as is), additive (add to noisy input), sigma_scaled (apply sigma scaling)."
-        " / モデル予測の解釈と処理方法："
-        "raw（そのまま使用）、additive（ノイズ入力に加算）、sigma_scaled（シグマスケーリングを適用）。",
-    )
-    parser.add_argument(
-        "--discrete_flow_shift",
-        type=float,
-        default=3.0,
-        help="Discrete flow shift for the Euler Discrete Scheduler, default is 3.0. / Euler Discrete Schedulerの離散フローシフト、デフォルトは3.0。",
+        help="Discrete flow shift for training timestep distribution adjustment, applied in addition to the weighting scheme, default is 1.0. /タイムステップ分布のための離散フローシフト、重み付けスキームの上に適用される、デフォルトは1.0。",
     )
 
 
@@ -1010,61 +988,34 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None):
     return weighting
 
 
-def get_noisy_model_input_and_timesteps(
-    args, noise_scheduler, latents, noise, device, dtype
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    bsz, _, h, w = latents.shape
-    sigmas = None
+# endregion
 
-    if args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
-        # Simple random t-based noise sampling
-        if args.timestep_sampling == "sigmoid":
-            # https://github.com/XLabs-AI/x-flux/tree/main
-            t = torch.sigmoid(args.sigmoid_scale * torch.randn((bsz,), device=device))
-        else:
-            t = torch.rand((bsz,), device=device)
 
-        t = t.view(-1, 1, 1, 1)
-        noisy_model_input = (1 - t) * latents + t * noise
-    elif args.timestep_sampling == "shift":
-        shift = args.discrete_flow_shift
-        logits_norm = torch.randn(bsz, device=device)
-        logits_norm = logits_norm * args.sigmoid_scale  # larger scale for more uniform sampling
-        timesteps = logits_norm.sigmoid()
-        timesteps = (timesteps * shift) / (1 + (shift - 1) * timesteps)
+def get_noisy_model_input_and_timesteps(args, latents, noise, device, dtype) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    bsz = latents.shape[0]
 
-        t = timesteps.view(-1, 1, 1, 1)
-        noisy_model_input = (1 - t) * latents + t * noise
-    elif args.timestep_sampling == "flux_shift":
-        logits_norm = torch.randn(bsz, device=device)
-        logits_norm = logits_norm * args.sigmoid_scale  # larger scale for more uniform sampling
-        timesteps = logits_norm.sigmoid()
-        mu = flux_train_utils.get_lin_function(
-            y1=0.5,
-            y2=1.15,
-        )((h // 2) * (w // 2))
-        timesteps = flux_train_utils.time_shift(mu, 1.0, timesteps)
+    # Sample a random timestep for each image
+    # for weighting schemes where we sample timesteps non-uniformly
+    u = compute_density_for_timestep_sampling(
+        weighting_scheme=args.weighting_scheme,
+        batch_size=bsz,
+        logit_mean=args.logit_mean,
+        logit_std=args.logit_std,
+        mode_scale=args.mode_scale,
+    )
+    t_min = args.min_timestep if args.min_timestep is not None else 0
+    t_max = args.max_timestep if args.max_timestep is not None else 1000
+    shift = args.training_shift
 
-        t = timesteps.view(-1, 1, 1, 1)
-        noisy_model_input = (1 - t) * latents + t * noise
-    else:
-        # Sample a random timestep for each image
-        # for weighting schemes where we sample timesteps non-uniformly
-        u = compute_density_for_timestep_sampling(
-            weighting_scheme=args.weighting_scheme,
-            batch_size=bsz,
-            logit_mean=args.logit_mean,
-            logit_std=args.logit_std,
-            mode_scale=args.mode_scale,
-        )
-        indices = (u * noise_scheduler.config.num_train_timesteps).long()
-        timesteps = noise_scheduler.timesteps[indices].to(device=device)
+    # weighting shift, value >1 will shift distribution to noisy side (focus more on overall structure), value <1 will shift towards less-noisy side (focus more on details)
+    u = (u * shift) / (1 + (shift - 1) * u)
 
-        # Add noise according to flow matching.
-        sigmas = get_sigmas(noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=dtype)
-        noisy_model_input = sigmas * noise + (1.0 - sigmas) * latents
+    indices = (u * (t_max - t_min) + t_min).long()
+    timesteps = indices.to(device=device, dtype=dtype)
+
+    # sigmas according to flowmatching
+    sigmas = timesteps / 1000
+    sigmas = sigmas.view(-1, 1, 1, 1)
+    noisy_model_input = sigmas * noise + (1.0 - sigmas) * latents
 
     return noisy_model_input, timesteps, sigmas
-
-
-# endregion
