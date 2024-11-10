@@ -95,7 +95,7 @@ h5py==3.11.0
     # via
     #   keras
     #   tensorflow-intel
-heavyball==0.3.0
+heavyball==0.9.0
     # via -r ./requirements.txt
 huggingface-hub==0.24.5
     # via
