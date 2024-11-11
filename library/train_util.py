@@ -1420,12 +1420,16 @@ class BaseDataset(torch.utils.data.Dataset):
         image_size = imagesize.get(image_path)
         if image_size[0] <= 0:
             # imagesize doesn't work for some images, so use cv2
-            img = cv2.imread(image_path)
-            if img is not None:
-                image_size = (img.shape[1], img.shape[0])
-            else:
-                logger.warning(f"failed to get image size: {image_path}")
-                image_size = (0, 0)
+            # img = cv2.imread(image_path)
+            # if img is not None:
+            #     image_size = (img.shape[1], img.shape[0])
+            
+            with Image.open(image_path) as img:
+                if img is not None:
+                    image_size = img.size
+                else:
+                    logger.warning(f"failed to get image size: {image_path}")
+                    image_size = (0, 0)
         return image_size
 
     def load_image_with_face_info(self, subset: BaseSubset, image_path: str, alpha_mask=False):
