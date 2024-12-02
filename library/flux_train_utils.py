@@ -221,7 +221,10 @@ def sample_image_inference(
     )
     timesteps = get_schedule(sample_steps, noise.shape[1], shift=True)  # FLUX.1 dev -> shift=True
     img_ids = flux_utils.prepare_img_ids(1, packed_latent_height, packed_latent_width).to(accelerator.device, weight_dtype)
-    t5_attn_mask = t5_attn_mask.to(accelerator.device) if args.apply_t5_attn_mask else None
+    if args.apply_t5_attn_mask and t5_attn_mask is not None:
+        t5_attn_mask = t5_attn_mask.to(accelerator.device)
+    else:
+        t5_attn_mask = None
 
     with accelerator.autocast(), torch.no_grad():
         x = denoise(flux, noise, img_ids, t5_out, txt_ids, l_pooled, timesteps=timesteps, guidance=scale, t5_attn_mask=t5_attn_mask)
