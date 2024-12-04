@@ -5092,6 +5092,9 @@ def get_optimizer(args, trainable_params, model=None) -> tuple[str, str, object]
         elif optimizer_type == "SGDScheduleFree".lower():
             optimizer_class = sf.SGDScheduleFree
             logger.info(f"use SGDScheduleFree optimizer | {optimizer_kwargs}")
+        elif optimizer_type == "RAdamScheduleFree".lower():
+            optimizer_class = sf.RAdamScheduleFree
+            logger.info(f"use RAdamScheduleFree optimizer | {optimizer_kwargs}")
         else:
             optimizer_class = None
 

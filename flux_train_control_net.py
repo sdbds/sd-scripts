@@ -30,6 +30,7 @@ from library.device_utils import clean_memory_on_device, init_ipex
 init_ipex()
 
 from accelerate.utils import set_seed
+from diffusers.utils.torch_utils import is_compiled_module
 
 import library.train_util as train_util
 from library import (
@@ -172,6 +173,11 @@ def train(args):
     # acceleratorを準備する
     logger.info("prepare accelerator")
     accelerator = train_util.prepare_accelerator(args)
+
+    def unwrap_model(model):
+        model = accelerator.unwrap_model(model)
+        model = model._orig_mod if is_compiled_module(model) else model
+        return model
 
     # mixed precisionに対応した型を用意しておき適宜castする
     weight_dtype, save_dtype = train_util.prepare_dtype(args)
@@ -748,7 +754,7 @@ def train(args):
                             epoch,
                             num_train_epochs,
                             global_step,
-                            accelerator.unwrap_model(controlnet),
+                            unwrap_model(controlnet),
                         )
                 optimizer_train_fn()
 
@@ -784,7 +790,7 @@ def train(args):
                     epoch,
                     num_train_epochs,
                     global_step,
-                    accelerator.unwrap_model(controlnet),
+                    unwrap_model(controlnet),
                 )
 
         flux_train_utils.sample_images(
@@ -794,7 +800,7 @@ def train(args):
 
     is_main_process = accelerator.is_main_process
     # if is_main_process:
-    controlnet = accelerator.unwrap_model(controlnet)
+    controlnet = unwrap_model(controlnet)
 
     accelerator.end_training()
     optimizer_eval_fn()
