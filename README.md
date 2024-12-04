@@ -14,7 +14,20 @@ The command to install PyTorch is as follows:
 
 ### Recent Updates
 
-1 Dec, 2024:
+
+Dec 3, 2024:
+
+-`--blocks_to_swap` now works in FLUX.1 ControlNet training. Sample commands for 24GB VRAM and 16GB VRAM are added [here](#flux1-controlnet-training).
+
+Dec 2, 2024:
+
+- FLUX.1 ControlNet training is supported. PR [#1813](https://github.com/kohya-ss/sd-scripts/pull/1813). Thanks to minux302!  See PR and [here](#flux1-controlnet-training) for details.
+  - Not fully tested. Feedback is welcome.
+  - 80GB VRAM is required for 1024x1024 resolution, and 48GB VRAM is required for 512x512 resolution.
+  - Currently, it only works in Linux environment (or Windows WSL2) because DeepSpeed is required.
+  - Multi-GPU training is not tested.
+
+Dec 1, 2024:
 
 - Pseudo Huber loss is now available for FLUX.1 and SD3.5 training. See PR [#1808](https://github.com/kohya-ss/sd-scripts/pull/1808)  for details. Thanks to recris!
   - Specify `--loss_type huber` or `--loss_type smooth_l1` to use it. `--huber_c` and `--huber_scale` are also available.
@@ -268,6 +281,14 @@ accelerate launch --mixed_precision bf16 --num_cpu_threads_per_process 1 flux_tr
 --timestep_sampling shift --discrete_flow_shift 3.1582 --model_prediction_type raw --guidance_scale 1.0 --deepspeed
 ```
 
+For 24GB VRAM GPUs, you can train with 16 blocks swapped and caching latents and text encoder outputs with the batch size of 1. Remove `--deepspeed` . Sample command is below. Not fully tested.
+```
+ --blocks_to_swap 16 --cache_latents_to_disk --cache_text_encoder_outputs_to_disk 
+```
+
+The training can be done with 16GB VRAM GPUs with around 30 blocks swapped. 
+
+`--gradient_accumulation_steps` is also available. The default value is 1 (no accumulation), but according to the original PR, 8 is used.
 
 ### FLUX.1 OFT training
 

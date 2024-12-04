@@ -21,7 +21,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    Union,
+    Union
 )
 from accelerate import Accelerator, InitProcessGroupKwargs, DistributedDataParallelKwargs, PartialState
 import glob
@@ -4691,7 +4691,7 @@ def resume_from_local_or_hf_if_specified(accelerator, args):
     accelerator.load_state(dirname)
 
 
-def get_optimizer(args, trainable_params, model=None):
+def get_optimizer(args, trainable_params, model=None) -> tuple[str, str, object]:
     # "Optimizer to use: AdamW, AdamW8bit, Lion, SGDNesterov, SGDNesterov8bit, PagedAdamW, PagedAdamW8bit, PagedAdamW32bit, Lion8bit, PagedLion8bit, AdEMAMix8bit, PagedAdEMAMix8bit, DAdaptation(DAdaptAdamPreprint), DAdaptAdaGrad, DAdaptAdam, DAdaptAdan, DAdaptAdanIP, DAdaptLion, DAdaptSGD, Adafactor"
 
     optimizer_type = args.optimizer_type
@@ -6558,21 +6558,6 @@ def sample_image_inference(
         # not to commit images to avoid inconsistency between training and logging steps
         wandb_tracker.log({f"sample_{i}": wandb.Image(image, caption=prompt)}, commit=False)  # positive prompt as a caption
 
-
-def freeze_blocks(model, num_last_block_to_freeze, block_name="x_block"):
-
-    filtered_blocks = [(name, param) for name, param in model.named_parameters() if block_name in name]
-    print(f"filtered_blocks: {len(filtered_blocks)}")
-
-    num_blocks_to_freeze = min(len(filtered_blocks), num_last_block_to_freeze)
-
-    print(f"freeze_blocks: {num_blocks_to_freeze}")
-    
-    start_freezing_from = max(0, len(filtered_blocks) - num_blocks_to_freeze)
-
-    for i in range(start_freezing_from, len(filtered_blocks)):
-        _, param = filtered_blocks[i]
-        param.requires_grad = False
 
 # endregion
 
