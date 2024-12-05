@@ -6303,6 +6303,7 @@ def line_to_prompt_dict(line: str) -> dict:
 
 
 def load_prompts(prompt_file: str) -> List[Dict]:
+    prompts = []
     # read prompts
     if prompt_file.endswith(".txt"):
         with open(prompt_file, "r", encoding="utf-8") as f:
