@@ -193,8 +193,10 @@ opt-einsum==3.3.0
     # via
     #   heavyball
     #   tensorflow-intel
-optree==0.12.1
-    # via keras
+optree==0.14.0
+    # via
+    #   -r ./requirements.txt
+    #   keras
 packaging==22.0
     # via
     #   accelerate
