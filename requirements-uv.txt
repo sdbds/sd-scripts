@@ -66,7 +66,7 @@ filelock==3.13.1
     #   huggingface-hub
     #   torch
     #   transformers
-flash-attn @ https://github.com/kingbri1/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu124torch2.5.1cxx11abiFALSE-cp310-cp310-win_amd64.whl
+flash-attn @ https://github.com/kingbri1/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu124torch2.6.0cxx11abiFALSE-cp310-cp310-win_amd64.whl
     # via -r ./requirements.txt
 flatbuffers==24.3.25
     # via
@@ -336,7 +336,7 @@ toml==0.10.2
     # via -r ./requirements.txt
 toolz==0.12.1
     # via altair
-torch==2.6.0+cu126
+torch==2.6.0+cu124
     # via
     #   -r ./requirements.txt
     #   accelerate
@@ -355,7 +355,7 @@ torch-optimi==0.2.1
     # via -r ./requirements.txt
 torchmetrics==1.0.3
     # via pytorch-lightning
-torchvision==0.21.0+cu126
+torchvision==0.21.0+cu124
     # via timm
 tqdm==4.64.1
     # via
