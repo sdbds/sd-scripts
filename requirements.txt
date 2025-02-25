@@ -44,7 +44,7 @@ onnxruntime-gpu>=1.18.1
 
 # for HunYuanDiT
 timm==1.0.11
-torch==2.6.0+cu124
+torch==2.5.1+cu124
 
 # this is for onnx: 
 protobuf
@@ -57,5 +57,5 @@ sentencepiece==0.2.0
 # for kohya_ss library
 -e .
 https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post10/triton-3.2.0-cp310-cp310-win_amd64.whl
-https://github.com/kingbri1/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu124torch2.6.0cxx11abiFALSE-cp310-cp310-win_amd64.whl
+https://github.com/sdbds/flash-attention-for-windows/releases/download/2.7.4.post1/flash_attn-2.7.4.post1+cu124torch2.5.1cxx11abiFALSEfullbackward-cp310-cp310-win_amd64.whl
 optree>=0.13.0
