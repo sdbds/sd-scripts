@@ -14,6 +14,33 @@ The command to install PyTorch is as follows:
 
 ### Recent Updates
 
+Feb 26, 2025:
+
+- Improve the validation loss calculation in `train_network.py`, `sdxl_train_network.py`, `flux_train_network.py`, and `sd3_train_network.py`. PR [#1903](https://github.com/kohya-ss/sd-scripts/pull/1903)
+  - The validation loss uses the fixed timestep sampling and the fixed random seed. This is to ensure that the validation loss is not fluctuated by the random values.
+
+Jan 25, 2025:
+
+- `train_network.py`, `sdxl_train_network.py`, `flux_train_network.py`, and `sd3_train_network.py` now support validation loss. PR [#1864](https://github.com/kohya-ss/sd-scripts/pull/1864) Thank you to rockerBOO!
+  - For details on how to set it up, please refer to the PR. The documentation will be updated as needed.
+  - It will be added to other scripts as well.
+  - As a current limitation, validation loss is not supported when `--block_to_swap` is specified, or when schedule-free optimizer is used.
+
+Dec 15, 2024:
+
+- RAdamScheduleFree optimizer is supported. PR [#1830](https://github.com/kohya-ss/sd-scripts/pull/1830) Thanks to nhamanasu!
+  - Update to `schedulefree==1.4` is required. Please update individually or with `pip install --use-pep517 --upgrade -r requirements.txt`.
+  - Available with `--optimizer_type=RAdamScheduleFree`. No need to specify warm up steps as well as learning rate scheduler.
+
+Dec 7, 2024:
+
+- The option to specify the model name during ControlNet training was different in each script. It has been unified. Please specify `--controlnet_model_name_or_path`. PR [#1821](https://github.com/kohya-ss/sd-scripts/pull/1821) Thanks to sdbds!
+<!-- 
+Also, the ControlNet training script for SD has been changed from `train_controlnet.py` to `train_control_net.py`.
+  - `train_controlnet.py` is still available, but it will be removed in the future.
+-->
+
+- Fixed an issue where the saved model would be corrupted (pos_embed would not be saved) when `--enable_scaled_pos_embed` was specified in `sd3_train.py`.
 
 Dec 3, 2024:
 

@@ -35,8 +35,6 @@ from library.custom_train_functions import (
     apply_snr_weight,
     pyramid_noise_like,
     apply_noise_offset,
-    gradfilter_ema,
-    gradfilter_ma,
 )
 from library.utils import setup_logging, add_logging_arguments
 
@@ -102,7 +100,7 @@ def train(args):
         }
 
     blueprint = blueprint_generator.generate(user_config, args, tokenizer=tokenizer)
-    train_dataset_group = config_util.generate_dataset_group_by_blueprint(blueprint.dataset_group)
+    train_dataset_group, val_dataset_group = config_util.generate_dataset_group_by_blueprint(blueprint.dataset_group)
 
     current_epoch = Value("i", 0)
     current_step = Value("i", 0)
@@ -303,28 +301,9 @@ def train(args):
         controlnet.to(weight_dtype)
 
     # acceleratorがなんかよろしくやってくれるらしい
-    if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-        controlnet, optimizer, train_dataloader = accelerator.prepare(
-            controlnet, optimizer, train_dataloader
-        )
-    else:
-        controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-            controlnet, optimizer, train_dataloader, lr_scheduler
-        )
-
-    if args.fused_backward_pass:
-        import library.adafactor_fused
-        library.adafactor_fused.patch_adafactor_fused(optimizer)
-        for param_group in optimizer.param_groups:
-            for parameter in param_group["params"]:
-                if parameter.requires_grad:
-                    def __grad_hook(tensor: torch.Tensor, param_group=param_group):
-                        if accelerator.sync_gradients and args.max_grad_norm != 0.0:
-                            accelerator.clip_grad_norm_(tensor, args.max_grad_norm)
-                        optimizer.step_param(tensor, param_group)
-                        tensor.grad = None
-
-                    parameter.register_post_accumulate_grad_hook(__grad_hook)
+    controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        controlnet, optimizer, train_dataloader, lr_scheduler
+    )
 
     if args.fused_backward_pass:
         import library.adafactor_fused
@@ -453,9 +432,6 @@ def train(args):
         # log empty object to commit the sample images to wandb
         accelerator.log({}, step=0)
 
-    if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
-        grads = None
-
     # training loop
     for epoch in range(num_train_epochs):
         if is_main_process:
@@ -463,8 +439,6 @@ def train(args):
         current_epoch.value = epoch + 1
 
         for step, batch in enumerate(train_dataloader):
-            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                optimizer.train()
             current_step.value = global_step
             with accelerator.accumulate(controlnet):
                 with torch.no_grad():
@@ -537,24 +511,6 @@ def train(args):
                 loss = loss.mean()  # 平均なのでbatch_sizeで割る必要なし
 
                 accelerator.backward(loss)
-
-                if args.gradfilter_ema_alpha:
-                    grads = gradfilter_ema(
-                        m=controlnet,
-                        grads=grads,
-                        alpha=args.gradfilter_ema_alpha,
-                        lamb=args.gradfilter_ema_lamb,
-                    )
-                elif args.gradfilter_ma_window_size:
-                    grads = gradfilter_ma(
-                        m=controlnet,
-                        grads=grads,
-                        window_size=args.gradfilter_ma_window_size,
-                        lamb=args.gradfilter_ma_lamb,
-                        filter_type=args.gradfilter_ma_filter_type,
-                        warmup=False if args.gradfilter_ma_warmup_false else True,
-                    )
-
                 if not args.fused_backward_pass:
                     if accelerator.sync_gradients and args.max_grad_norm != 0.0:
                         params_to_clip = controlnet.parameters()
@@ -566,9 +522,6 @@ def train(args):
                 else:
                     # optimizer.step() and optimizer.zero_grad() are called in the optimizer hook
                     lr_scheduler.step()
-
-            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                optimizer.eval()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
