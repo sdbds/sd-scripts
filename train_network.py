@@ -850,11 +850,11 @@ class NetworkTrainer:
                 network=network,
             )
             if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                ds_model, optimizer, train_dataloader = accelerator.prepare(
+                ds_model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
                     ds_model, optimizer, train_dataloader, val_dataloader
                 )    
             else:
-                ds_model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+                ds_model, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
                     ds_model, optimizer, train_dataloader, val_dataloader, lr_scheduler
                 )
             training_model = ds_model
@@ -877,11 +877,11 @@ class NetworkTrainer:
                 pass  # if text_encoder is not trained, no need to prepare. and device and dtype are already set
             
             if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                network, optimizer, train_dataloader = accelerator.prepare(
+                network, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
                     network, optimizer, train_dataloader, val_dataloader
                 )  
             else:
-                network, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+                network, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
                     network, optimizer, train_dataloader, val_dataloader, lr_scheduler
                 )
             training_model = network
