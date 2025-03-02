@@ -61,6 +61,8 @@ ARCH_SD3_M = "stable-diffusion-3"  # may be followed by "-m" or "-5-large" etc.
 # ARCH_SD3_UNKNOWN = "stable-diffusion-3"
 ARCH_FLUX_1_DEV = "flux-1-dev"
 ARCH_FLUX_1_UNKNOWN = "flux-1"
+ARCH_LUMINA_2 = "lumina-2"
+ARCH_LUMINA_UNKNOWN = "lumina"
 
 ARCH_HYDIT_V1_1 = "hunyuan-dit-g2-v1_1"
 ARCH_HYDIT_V1_2 = "hunyuan-dit-g2-v1_2"
@@ -75,6 +77,7 @@ IMPL_STABILITY_AI_STABLE_CASCADE = "https://github.com/Stability-AI/StableCascad
 IMPL_DIFFUSERS = "diffusers"
 IMPL_HUNYUAN_DIT = "https://github.com/Tencent/HunyuanDiT"
 IMPL_FLUX = "https://github.com/black-forest-labs/flux"
+IMPL_LUMINA = "https://github.com/Alpha-VLLM/Lumina-Image-2.0"
 
 PRED_TYPE_EPSILON = "epsilon"
 PRED_TYPE_V = "v"
@@ -131,6 +134,7 @@ def build_metadata(
     stable_cascade: Optional[bool] = None,
     sd3: Optional[str] = None,
     flux: Optional[str] = None,
+    lumina: Optional[str] = None,
 ):
     """
     sd3: only supports "m", flux: only supports "dev"
@@ -163,6 +167,11 @@ def build_metadata(
             arch = ARCH_FLUX_1_DEV
         else:
             arch = ARCH_FLUX_1_UNKNOWN
+    elif lumina is not None:
+        if lumina == "lumina2":
+            arch = ARCH_LUMINA_2
+        else:
+            arch = ARCH_LUMINA_UNKNOWN
     elif v2:
         if v_parameterization:
             arch = ARCH_SD_V2_768_V
@@ -188,6 +197,9 @@ def build_metadata(
         impl = IMPL_HUNYUAN_DIT
     elif stable_cascade:
         impl = IMPL_STABILITY_AI_STABLE_CASCADE
+    elif lumina is not None:
+        # Lumina
+        impl = IMPL_LUMINA
     elif (lora and sdxl) or textual_inversion or is_stable_diffusion_ckpt:
         # Stable Diffusion ckpt, TI, SDXL LoRA
         impl = IMPL_STABILITY_AI
@@ -246,7 +258,7 @@ def build_metadata(
             reso = (reso[0], reso[0])
     else:
         # resolution is defined in dataset, so use default
-        if sdxl or sd3 is not None or flux is not None:
+        if sdxl or sd3 is not None or flux is not None or lumina is not None:
             reso = 1024
         elif v2 and v_parameterization:
             reso = 768

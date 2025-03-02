@@ -139,11 +139,11 @@ TEXT_ENCODER_OUTPUTS_CACHE_SUFFIX_SD3 = "_sd3_te.npz"
 
 
 def split_train_val(
-    paths: List[str],
+    paths: List[str], 
     sizes: List[Optional[Tuple[int, int]]],
-    is_training_dataset: bool,
-    validation_split: float,
-    validation_seed: int | None,
+    is_training_dataset: bool, 
+    validation_split: float, 
+    validation_seed: int | None
 ) -> Tuple[List[str], List[Optional[Tuple[int, int]]]]:
     """
     Split the dataset into train and validation
@@ -191,7 +191,7 @@ class ImageInfo:
         self.latents_flipped: Optional[torch.Tensor] = None
         self.latents_npz: Optional[str] = None  # set in cache_latents
         self.latents_original_size: Optional[Tuple[int, int]] = None  # original image size, not latents size
-        self.latents_crop_ltrb: Optional[Tuple[int, int]] = (
+        self.latents_crop_ltrb: Optional[Tuple[int, int, int, int]] = (
             None  # crop left top right bottom in original pixel size, not latents size
         )
         self.cond_img_path: Optional[str] = None
@@ -206,6 +206,8 @@ class ImageInfo:
         self.text_encoder_pool2: Optional[torch.Tensor] = None
 
         self.alpha_mask: Optional[torch.Tensor] = None  # alpha mask can be flipped in runtime
+
+        self.system_prompt: Optional[str] = None
 
 
 class BucketManager:
@@ -430,6 +432,7 @@ class BaseSubset:
         custom_attributes: Optional[Dict[str, Any]] = None,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
+        system_prompt: Optional[str] = None
     ) -> None:
         self.image_dir = image_dir
         self.alpha_mask = alpha_mask if alpha_mask is not None else False
@@ -459,6 +462,8 @@ class BaseSubset:
 
         self.validation_seed = validation_seed
         self.validation_split = validation_split
+
+        self.system_prompt = system_prompt
 
 
 class DreamBoothSubset(BaseSubset):
@@ -491,6 +496,7 @@ class DreamBoothSubset(BaseSubset):
         custom_attributes: Optional[Dict[str, Any]] = None,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
+        system_prompt: Optional[str] = None
     ) -> None:
         assert image_dir is not None, "image_dir must be specified / image_dirは指定が必須です"
 
@@ -518,6 +524,7 @@ class DreamBoothSubset(BaseSubset):
             custom_attributes=custom_attributes,
             validation_seed=validation_seed,
             validation_split=validation_split,
+            system_prompt=system_prompt
         )
 
         self.is_reg = is_reg
@@ -560,6 +567,7 @@ class FineTuningSubset(BaseSubset):
         custom_attributes: Optional[Dict[str, Any]] = None,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
+        system_prompt: Optional[str] = None
     ) -> None:
         assert metadata_file is not None, "metadata_file must be specified / metadata_fileは指定が必須です"
 
@@ -587,6 +595,7 @@ class FineTuningSubset(BaseSubset):
             custom_attributes=custom_attributes,
             validation_seed=validation_seed,
             validation_split=validation_split,
+            system_prompt=system_prompt
         )
 
         self.metadata_file = metadata_file
@@ -625,6 +634,7 @@ class ControlNetSubset(BaseSubset):
         custom_attributes: Optional[Dict[str, Any]] = None,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
+        system_prompt: Optional[str] = None
     ) -> None:
         assert image_dir is not None, "image_dir must be specified / image_dirは指定が必須です"
 
@@ -652,6 +662,7 @@ class ControlNetSubset(BaseSubset):
             custom_attributes=custom_attributes,
             validation_seed=validation_seed,
             validation_split=validation_split,
+            system_prompt=system_prompt
         )
 
         self.conditioning_data_dir = conditioning_data_dir
@@ -1696,8 +1707,9 @@ class BaseDataset(torch.utils.data.Dataset):
             text_encoder_outputs_list.append(text_encoder_outputs)
 
             if tokenization_required:
+                system_prompt = subset.system_prompt or ""
                 caption = self.process_caption(subset, image_info.caption)
-                input_ids = [ids[0] for ids in self.tokenize_strategy.tokenize(caption)]  # remove batch dimension
+                input_ids = [ids[0] for ids in self.tokenize_strategy.tokenize(system_prompt + caption)]  # remove batch dimension
                 # if self.XTI_layers:
                 #     caption_layer = []
                 #     for layer in self.XTI_layers:
@@ -1867,6 +1879,7 @@ class DreamBoothDataset(BaseDataset):
         debug_dataset: bool,
         validation_split: float,
         validation_seed: Optional[int],
+        system_prompt: Optional[str],
     ) -> None:
         super().__init__(resolution, network_multiplier, debug_dataset)
 
@@ -1879,6 +1892,7 @@ class DreamBoothDataset(BaseDataset):
         self.is_training_dataset = is_training_dataset
         self.validation_seed = validation_seed
         self.validation_split = validation_split
+        self.system_prompt = system_prompt
 
         self.enable_bucket = enable_bucket
         if self.enable_bucket:
@@ -2001,11 +2015,15 @@ class DreamBoothDataset(BaseDataset):
                     if self.is_training_dataset is False:
                         img_paths = []
                         sizes = []
-                    # Otherwise the img_paths remain as original img_paths and no split
+                    # Otherwise the img_paths remain as original img_paths and no split 
                     # required for training images dataset of regularization images
                 else:
                     img_paths, sizes = split_train_val(
-                        img_paths, sizes, self.is_training_dataset, self.validation_split, self.validation_seed
+                        img_paths, 
+                        sizes,
+                        self.is_training_dataset, 
+                        self.validation_split, 
+                        self.validation_seed
                     )
 
             logger.info(f"found directory {subset.image_dir} contains {len(img_paths)} image files")
@@ -2065,6 +2083,7 @@ class DreamBoothDataset(BaseDataset):
         num_train_images = 0
         num_reg_images = 0
         reg_infos: List[Tuple[ImageInfo, DreamBoothSubset]] = []
+
         for subset in subsets:
             num_repeats = subset.num_repeats if self.is_training_dataset else 1
             if num_repeats < 1:
@@ -2091,8 +2110,9 @@ class DreamBoothDataset(BaseDataset):
             else:
                 num_train_images += num_repeats * len(img_paths)
 
+            system_prompt = self.system_prompt or subset.system_prompt or ""
             for img_path, caption, size in zip(img_paths, captions, sizes):
-                info = ImageInfo(img_path, num_repeats, caption, subset.is_reg, img_path)
+                info = ImageInfo(img_path, num_repeats, system_prompt + caption, subset.is_reg, img_path)
                 if size is not None:
                     info.image_size = size
                 if subset.is_reg:
@@ -2973,7 +2993,7 @@ def trim_and_resize_if_required(
 # for new_cache_latents
 def load_images_and_masks_for_caching(
     image_infos: List[ImageInfo], use_alpha_mask: bool, random_crop: bool
-) -> Tuple[torch.Tensor, List[np.ndarray], List[Tuple[int, int]], List[Tuple[int, int, int, int]]]:
+) -> Tuple[torch.Tensor, List[torch.Tensor], List[Tuple[int, int]], List[Tuple[int, int, int, int]]]:
     r"""
     requires image_infos to have: [absolute_path or image], bucket_reso, resized_size
 
@@ -3475,6 +3495,7 @@ def get_sai_model_spec(
     sd3: str = None,
     hydit: str = None,
     flux: str = None,
+    lumina: str = None,
 ):
     timestamp = time.time()
 
@@ -3511,6 +3532,7 @@ def get_sai_model_spec(
         sd3=sd3,
         hydit=hydit,
         flux=flux,
+        lumina=lumina,
     )
     return metadata
 
@@ -6396,6 +6418,16 @@ def line_to_prompt_dict(line: str) -> dict:
             m = re.match(r"cn (.+)", parg, re.IGNORECASE)
             if m:
                 prompt_dict["controlnet_image"] = m.group(1)
+                continue
+
+            m = re.match(r"ct (.+)", parg, re.IGNORECASE)
+            if m:
+                prompt_dict["cfg_trunc_ratio"] = float(m.group(1))
+                continue
+
+            m = re.match(r"rc (.+)", parg, re.IGNORECASE)
+            if m:
+                prompt_dict["renorm_cfg"] = float(m.group(1))
                 continue
 
         except ValueError as ex:
