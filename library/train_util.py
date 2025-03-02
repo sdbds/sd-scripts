@@ -3765,12 +3765,7 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
             "aot_ts_nvfuser",
             "nvprims_nvfuser",
             "cudagraphs",
-            "ofi",
-            "fx2trt",
             "onnxrt",
-            "tensort",
-            "ipex",
-            "tvm",
         ],
         help="dynamo backend type (default is inductor) / dynamoのbackendの種類（デフォルトは inductor）",
     )
