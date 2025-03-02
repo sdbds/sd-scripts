@@ -73,10 +73,10 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
                 )
                 model.to(torch.float8_e4m3fn)
 
-        # if args.blocks_to_swap:
-        #     logger.info(f'Enabling block swap: {args.blocks_to_swap}')
-        #     model.enable_block_swap(args.blocks_to_swap, accelerator.device)
-        #     self.is_swapping_blocks = True
+        if args.blocks_to_swap:
+            logger.info(f'Lumina 2: Enabling block swap: {args.blocks_to_swap}')
+            model.enable_block_swap(args.blocks_to_swap, accelerator.device)
+            self.is_swapping_blocks = True
 
         gemma2 = lumina_util.load_gemma2(args.gemma2, weight_dtype, "cpu")
         gemma2.eval()
@@ -155,7 +155,8 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
                 assert isinstance(tokenize_strategy, strategy_lumina.LuminaTokenizeStrategy)
                 assert isinstance(text_encoding_strategy, strategy_lumina.LuminaTextEncodingStrategy)
 
-                system_prompt = args.system_prompt or ""
+                system_prompt_special_token = "<Prompt Start>"
+                system_prompt = f"{args.system_prompt} {system_prompt_special_token} " if args.system_prompt else "" 
                 sample_prompts = train_util.load_prompts(args.sample_prompts)
                 sample_prompts_te_outputs = {}  # key: prompt, value: text encoder outputs
                 with accelerator.autocast(), torch.no_grad():
@@ -164,8 +165,10 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
                             prompt_dict.get("prompt", ""),
                             prompt_dict.get("negative_prompt", ""),
                         ]
-                        for prompt in prompts:
-                            prompt = system_prompt + prompt
+                        for i, prompt in enumerate(prompts):
+                            # Add system prompt only to positive prompt
+                            if i == 0:
+                                prompt = system_prompt + prompt
                             if prompt in sample_prompts_te_outputs:
                                 continue
 
@@ -360,6 +363,12 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
         accelerator.unwrap_model(nextdit).prepare_block_swap_before_forward()
 
         return nextdit
+
+    def on_validation_step_end(self, args, accelerator, network, text_encoders, unet, batch, weight_dtype):
+        if self.is_swapping_blocks:
+            # prepare for next forward: because backward pass is not called, we need to prepare it here
+            accelerator.unwrap_model(unet).prepare_block_swap_before_forward()
+
 
 
 def setup_parser() -> argparse.ArgumentParser:

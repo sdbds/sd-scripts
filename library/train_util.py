@@ -139,11 +139,11 @@ TEXT_ENCODER_OUTPUTS_CACHE_SUFFIX_SD3 = "_sd3_te.npz"
 
 
 def split_train_val(
-    paths: List[str], 
+    paths: List[str],
     sizes: List[Optional[Tuple[int, int]]],
-    is_training_dataset: bool, 
-    validation_split: float, 
-    validation_seed: int | None
+    is_training_dataset: bool,
+    validation_split: float,
+    validation_seed: int | None,
 ) -> Tuple[List[str], List[Optional[Tuple[int, int]]]]:
     """
     Split the dataset into train and validation
@@ -1707,7 +1707,8 @@ class BaseDataset(torch.utils.data.Dataset):
             text_encoder_outputs_list.append(text_encoder_outputs)
 
             if tokenization_required:
-                system_prompt = subset.system_prompt or ""
+                system_prompt_special_token = "<Prompt Start>"
+                system_prompt = f"{subset.system_prompt} {system_prompt_special_token} " if subset.system_prompt else ""
                 caption = self.process_caption(subset, image_info.caption)
                 input_ids = [ids[0] for ids in self.tokenize_strategy.tokenize(system_prompt + caption)]  # remove batch dimension
                 # if self.XTI_layers:
@@ -2015,15 +2016,11 @@ class DreamBoothDataset(BaseDataset):
                     if self.is_training_dataset is False:
                         img_paths = []
                         sizes = []
-                    # Otherwise the img_paths remain as original img_paths and no split 
+                    # Otherwise the img_paths remain as original img_paths and no split
                     # required for training images dataset of regularization images
                 else:
                     img_paths, sizes = split_train_val(
-                        img_paths, 
-                        sizes,
-                        self.is_training_dataset, 
-                        self.validation_split, 
-                        self.validation_seed
+                        img_paths, sizes, self.is_training_dataset, self.validation_split, self.validation_seed
                     )
 
             logger.info(f"found directory {subset.image_dir} contains {len(img_paths)} image files")
@@ -2110,7 +2107,8 @@ class DreamBoothDataset(BaseDataset):
             else:
                 num_train_images += num_repeats * len(img_paths)
 
-            system_prompt = self.system_prompt or subset.system_prompt or ""
+            system_prompt_special_token = "<Prompt Start>"
+            system_prompt = f"{self.system_prompt or subset.system_prompt} {system_prompt_special_token} " if self.system_prompt or subset.system_prompt else ""
             for img_path, caption, size in zip(img_paths, captions, sizes):
                 info = ImageInfo(img_path, num_repeats, system_prompt + caption, subset.is_reg, img_path)
                 if size is not None:

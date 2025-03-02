@@ -330,11 +330,12 @@ def sample_image_inference(
         logger.info(f"renorm: {renorm_cfg}")
         # logger.info(f"sample_sampler: {sampler_name}")
 
-        system_prompt = args.system_prompt or ""
+        system_prompt_special_token = "<Prompt Start>"
+        system_prompt = f"{args.system_prompt} {system_prompt_special_token} " if args.system_prompt else ""
 
         # Apply system prompt to prompts
         prompt = system_prompt + prompt
-        negative_prompt = system_prompt + negative_prompt
+        negative_prompt = negative_prompt
 
         # Get sample prompts from cache
         if sample_prompts_gemma2_outputs and prompt in sample_prompts_gemma2_outputs:
@@ -604,7 +605,6 @@ def retrieve_timesteps(
         timesteps = scheduler.timesteps
     return timesteps, num_inference_steps
 
-
 def denoise(
     scheduler,
     model: lumina_models.NextDiT,
@@ -648,6 +648,8 @@ def denoise(
     """
 
     for i, t in enumerate(tqdm(timesteps)):
+        model.prepare_block_swap_before_forward()
+
         # reverse the timestep since Lumina uses t=0 as the noise and t=1 as the image
         current_timestep = 1 - t / scheduler.config.num_train_timesteps
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
@@ -664,6 +666,7 @@ def denoise(
 
         # compute whether to apply classifier-free guidance based on current timestep
         if current_timestep[0] < cfg_trunc_ratio:
+            model.prepare_block_swap_before_forward()
             noise_pred_uncond = model(
                 img,
                 current_timestep,
@@ -680,12 +683,14 @@ def denoise(
                     dim=tuple(range(1, len(noise_pred_cond.shape))),
                     keepdim=True,
                 )
-                max_new_norm = cond_norm * float(renorm_cfg)
-                noise_norm = torch.linalg.vector_norm(
+                max_new_norms = cond_norm * float(renorm_cfg)
+                noise_norms = torch.linalg.vector_norm(
                     noise_pred, dim=tuple(range(1, len(noise_pred.shape))), keepdim=True
                 )
-                if noise_norm >= max_new_norm:
-                    noise_pred = noise_pred * (max_new_norm / noise_norm)
+                # Iterate through batch
+                for noise_norm, max_new_norm, noise in zip(noise_norms, max_new_norms, noise_pred):
+                    if noise_norm >= max_new_norm:
+                        noise = noise * (max_new_norm / noise_norm)
         else:
             noise_pred = noise_pred_cond
 
@@ -700,6 +705,7 @@ def denoise(
         noise_pred = -noise_pred
         img = scheduler.step(noise_pred, t, img, return_dict=False)[0]
 
+    model.prepare_block_swap_before_forward()
     return img
 
 

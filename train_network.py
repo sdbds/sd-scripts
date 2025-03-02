@@ -16,10 +16,9 @@ from tqdm import tqdm
 
 import torch
 from torch.types import Number
-from library.device_utils import init_ipex, clean_memory_on_device, tf32_on
+from library.device_utils import init_ipex, clean_memory_on_device
 
 init_ipex()
-tf32_on()
 
 from accelerate.utils import set_seed
 from accelerate import Accelerator
@@ -44,8 +43,6 @@ from library.custom_train_functions import (
     add_v_prediction_like_loss,
     apply_debiased_estimation,
     apply_masked_loss,
-    gradfilter_ema,
-    gradfilter_ma,
 )
 from library.utils import setup_logging, add_logging_arguments
 
@@ -82,7 +79,7 @@ class NetworkTrainer:
 
         lrs = lr_scheduler.get_last_lr()
         for i, lr in enumerate(lrs):
-            if lr_descriptions is not None and i < len(lr_descriptions):
+            if lr_descriptions is not None:
                 lr_desc = lr_descriptions[i]
             else:
                 idx = i - (0 if args.network_train_unet_only else -1)
@@ -184,15 +181,6 @@ class NetworkTrainer:
     def get_tokenize_strategy(self, args):
         return strategy_sd.SdTokenizeStrategy(args.v2, args.max_token_length, args.tokenizer_cache_dir)
 
-    def load_noise_scheduler(self, args):
-        noise_scheduler = DDPMScheduler(
-            beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, clip_sample=False
-        )
-        return noise_scheduler
-
-    def is_text_encoder_outputs_cached(self, args):
-        return False
-
     def get_tokenizers(self, tokenize_strategy: strategy_sd.SdTokenizeStrategy) -> List[Any]:
         return [tokenize_strategy.tokenizer]
 
@@ -244,7 +232,9 @@ class NetworkTrainer:
         pass
 
     def get_noise_scheduler(self, args: argparse.Namespace, device: torch.device) -> Any:
-        noise_scheduler = self.load_noise_scheduler(args)
+        noise_scheduler = DDPMScheduler(
+            beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, clip_sample=False
+        )
         prepare_scheduler_for_custom_training(noise_scheduler, device)
         if args.zero_terminal_snr:
             custom_train_functions.fix_noise_scheduler_betas_for_zero_terminal_snr(noise_scheduler)
@@ -544,9 +534,6 @@ class NetworkTrainer:
         ds_for_collator = train_dataset_group if args.max_data_loader_n_workers == 0 else None
         collator = train_util.collator_class(current_epoch, current_step, ds_for_collator)
 
-        if args.no_token_padding:
-            train_dataset_group.disable_token_padding()
-
         if args.debug_dataset:
             train_dataset_group.set_current_strategies()  # dataset needs to know the strategies explicitly
             train_util.debug_dataset(train_dataset_group)
@@ -645,14 +632,14 @@ class NetworkTrainer:
 
         # if a new network is added in future, add if ~ then blocks for each network (;'∀')
         if args.dim_from_weights:
-            network, _ = network_module.create_network_from_weights(args.network_multiplier, args.network_weights, vae, text_encoder, unet, **net_kwargs)
+            network, _ = network_module.create_network_from_weights(1, args.network_weights, vae, text_encoder, unet, **net_kwargs)
         else:
             if "dropout" not in net_kwargs:
                 # workaround for LyCORIS (;^ω^)
                 net_kwargs["dropout"] = args.network_dropout
 
             network = network_module.create_network(
-                args.network_multiplier,
+                1.0,
                 args.network_dim,
                 args.network_alpha,
                 vae,
@@ -663,7 +650,7 @@ class NetworkTrainer:
             )
         if network is None:
             return
-        network_has_multiplier = hasattr(network, "set_multiplier") and args.network_multiplier != 1.0
+        network_has_multiplier = hasattr(network, "set_multiplier")
 
         if hasattr(network, "prepare_network"):
             network.prepare_network(args)
@@ -679,9 +666,6 @@ class NetworkTrainer:
         train_unet = not args.network_train_text_encoder_only
         train_text_encoder = self.is_train_text_encoder(args)
         network.apply_to(text_encoder, unet, train_text_encoder, train_unet)
-
-        if args.num_last_block_to_freeze:
-            train_util.freeze_blocks(network,num_last_block_to_freeze=args.num_last_block_to_freeze)
 
         if args.network_weights is not None:
             # FIXME consider alpha of weights: this assumes that the alpha is not changed
@@ -739,7 +723,7 @@ class NetworkTrainer:
         #             v = len(v)
         #         accelerator.print(f"trainable_params: {k} = {v}")
 
-        optimizer_name, optimizer_args, optimizer = train_util.get_optimizer(args, trainable_params, network)
+        optimizer_name, optimizer_args, optimizer = train_util.get_optimizer(args, trainable_params)
         optimizer_train_fn, optimizer_eval_fn = train_util.get_optimizer_train_eval_fn(optimizer, args)
 
         # prepare dataloader
@@ -759,7 +743,6 @@ class NetworkTrainer:
             collate_fn=collator,
             num_workers=n_workers,
             persistent_workers=args.persistent_data_loader_workers,
-            pin_memory=True,
         )
 
         val_dataloader = torch.utils.data.DataLoader(
@@ -830,14 +813,10 @@ class NetworkTrainer:
             # in case of cpu, dtype is already set to fp32 because cpu does not support fp8/fp16/bf16
             if t_enc.device.type != "cpu":
                 t_enc.to(dtype=te_weight_dtype)
+
                 # nn.Embedding not support FP8
                 if te_weight_dtype != weight_dtype:
                     self.prepare_text_encoder_fp8(i, t_enc, te_weight_dtype, weight_dtype)
-                elif hasattr(t_enc, "encoder") and hasattr(t_enc.encoder, "embeddings"):
-                    t_enc.encoder.embeddings.to(dtype=(weight_dtype if te_weight_dtype != weight_dtype else te_weight_dtype))
-                elif hasattr(t_enc, "get_token_embedding"):
-                    # Others (mT5 or other encoder, will have custom method to get the correct embedding)
-                    t_enc.get_token_embedding().to(dtype=(weight_dtype if te_weight_dtype != weight_dtype else te_weight_dtype))
 
         # acceleratorがなんかよろしくやってくれるらしい / accelerator will do something good
         if args.deepspeed:
@@ -849,14 +828,9 @@ class NetworkTrainer:
                 text_encoder2=(text_encoders[1] if flags[1] else None) if len(text_encoders) > 1 else None,
                 network=network,
             )
-            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                ds_model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
-                    ds_model, optimizer, train_dataloader, val_dataloader
-                )    
-            else:
-                ds_model, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
-                    ds_model, optimizer, train_dataloader, val_dataloader, lr_scheduler
-                )
+            ds_model, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
+                ds_model, optimizer, train_dataloader, val_dataloader, lr_scheduler
+            )
             training_model = ds_model
         else:
             if train_unet:
@@ -875,39 +849,23 @@ class NetworkTrainer:
                     text_encoder = text_encoders[0]
             else:
                 pass  # if text_encoder is not trained, no need to prepare. and device and dtype are already set
-            
-            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                network, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
-                    network, optimizer, train_dataloader, val_dataloader
-                )  
-            else:
-                network, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
-                    network, optimizer, train_dataloader, val_dataloader, lr_scheduler
-                )
+
+            network, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
+                network, optimizer, train_dataloader, val_dataloader, lr_scheduler
+            )
             training_model = network
 
         if args.gradient_checkpointing:
             # according to TI example in Diffusers, train is required
-            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                optimizer.train()
             unet.train()
-
             for i, (t_enc, frag) in enumerate(zip(text_encoders, self.get_text_encoders_train_flags(args, text_encoders))):
                 t_enc.train()
 
                 # set top parameter requires_grad = True for gradient checkpointing works
                 if frag:
                     self.prepare_text_encoder_grad_ckpt_workaround(i, t_enc)
-                elif hasattr(t_enc, "embeddings"):
-                    # HunYuan Bert(CLIP)
-                    t_enc.embeddings.requires_grad_(True)
-                elif hasattr(t_enc, "get_token_embedding"):
-                    # Others (mT5 or other encoder, will have custom method to get the correct embedding)
-                    t_enc.get_token_embedding().requires_grad_(True)
 
         else:
-            if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                optimizer.eval()
             unet.eval()
             for t_enc in text_encoders:
                 t_enc.eval()
@@ -1324,7 +1282,6 @@ class NetworkTrainer:
         # For --sample_at_first
         optimizer_eval_fn()
         self.sample_images(accelerator, args, 0, global_step, accelerator.device, vae, tokenizers, text_encoder, unet)
-        progress_bar.unpause() # Reset progress bar to before sampling images
         optimizer_train_fn()
         is_tracking = len(accelerator.trackers) > 0
         if is_tracking:
@@ -1338,9 +1295,6 @@ class NetworkTrainer:
                 initial_step -= len(train_dataloader)
             global_step = initial_step
 
-
-        if args.gradfilter_ema_alpha or args.gradfilter_ma_window_size:
-            grads = None
         # log device and dtype for each model
         logger.info(f"unet dtype: {unet_weight_dtype}, device: {unet.device}")
         for i, t_enc in enumerate(text_encoders):
@@ -1411,8 +1365,6 @@ class NetworkTrainer:
                 initial_step = 1
 
             for step, batch in enumerate(skipped_dataloader or train_dataloader):
-                if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                    optimizer.train()
                 current_step.value = global_step
                 if initial_step > 0:
                     initial_step -= 1
@@ -1449,26 +1401,8 @@ class NetworkTrainer:
                             params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
                             accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
-                    if args.gradfilter_ema_alpha:
-                        grads = gradfilter_ema(
-                            m=network,
-                            grads=grads,
-                            alpha=args.gradfilter_ema_alpha,
-                            lamb=args.gradfilter_ema_lamb,
-                        )
-                    elif args.gradfilter_ma_window_size:
-                        grads = gradfilter_ma(
-                            m=network,
-                            grads=grads,
-                            window_size=args.gradfilter_ma_window_size,
-                            lamb=args.gradfilter_ma_lamb,
-                            filter_type=args.gradfilter_ma_filter_type,
-                            warmup=False if args.gradfilter_ma_warmup_false else True,
-                        )
-
                     optimizer.step()
-                    if not (args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper):
-                        lr_scheduler.step()
+                    lr_scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
 
                 if args.scale_weight_norms:
@@ -1478,9 +1412,6 @@ class NetworkTrainer:
                     max_mean_logs = {"Keys Scaled": keys_scaled, "Average key norm": mean_norm}
                 else:
                     keys_scaled, mean_norm, maximum_norm = None, None, None
-
-                if args.optimizer_type.lower().endswith("schedulefree") or args.optimizer_schedulefree_wrapper:
-                    optimizer.eval()
 
                 # Checks if the accelerator has performed an optimization step behind the scenes
                 if accelerator.sync_gradients:
@@ -1492,8 +1423,6 @@ class NetworkTrainer:
                         accelerator, args, None, global_step, accelerator.device, vae, tokenizers, text_encoder, unet
                     )
                     progress_bar.unpause()
-
-                    clean_memory_on_device(accelerator.device)
 
                     # 指定ステップごとにモデルを保存
                     if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
@@ -1662,7 +1591,7 @@ class NetworkTrainer:
 
                 if is_tracking:
                     avr_loss: float = val_epoch_loss_recorder.moving_average
-                    loss_validation_divergence = val_epoch_loss_recorder.moving_average - loss_recorder.moving_average 
+                    loss_validation_divergence = val_epoch_loss_recorder.moving_average - loss_recorder.moving_average
                     logs = {
                         "loss/validation/epoch_average": avr_loss,
                         "loss/validation/epoch_divergence": loss_validation_divergence,
@@ -1702,8 +1631,6 @@ class NetworkTrainer:
             self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizers, text_encoder, unet)
             progress_bar.unpause()
             optimizer_train_fn()
-
-            clean_memory_on_device(accelerator.device)
 
             # end of epoch
 
@@ -1801,11 +1728,6 @@ def setup_parser() -> argparse.ArgumentParser:
         default=None,
         nargs="*",
         help="additional arguments for network (key=value) / ネットワークへの追加の引数",
-    )
-    parser.add_argument(
-        "--no_token_padding",
-        action="store_true",
-        help="disable token padding (same as Diffuser's DreamBooth) / トークンのpaddingを無効にする（Diffusers版DreamBoothと同じ動作）",
     )
     parser.add_argument(
         "--network_train_unet_only", action="store_true", help="only training U-Net part / U-Net関連部分のみ学習する"
