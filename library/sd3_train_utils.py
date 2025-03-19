@@ -701,8 +701,6 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
             # when use_dynamic_shifting is True, we apply the timestep shifting on the fly based on the image resolution
             sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)
 
-        sigmas = sigmas * sigma_max_scale
-
         self.timesteps = sigmas * num_train_timesteps
 
         self._step_index = None
