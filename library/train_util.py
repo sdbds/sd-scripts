@@ -435,7 +435,7 @@ class BaseSubset:
         custom_attributes: Optional[Dict[str, Any]] = None,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
         resize_interpolation: Optional[str] = None,
     ) -> None:
         self.image_dir = image_dir
@@ -501,7 +501,7 @@ class DreamBoothSubset(BaseSubset):
         custom_attributes: Optional[Dict[str, Any]] = None,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
         resize_interpolation: Optional[str] = None,
     ) -> None:
         assert image_dir is not None, "image_dir must be specified / image_dirは指定が必須です"
@@ -530,7 +530,7 @@ class DreamBoothSubset(BaseSubset):
             custom_attributes=custom_attributes,
             validation_seed=validation_seed,
             validation_split=validation_split,
-            system_prompt=system_prompt
+            system_prompt=system_prompt,
             resize_interpolation=resize_interpolation,
         )
 
@@ -574,7 +574,7 @@ class FineTuningSubset(BaseSubset):
         custom_attributes: Optional[Dict[str, Any]] = None,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
         resize_interpolation: Optional[str] = None,
     ) -> None:
         assert metadata_file is not None, "metadata_file must be specified / metadata_fileは指定が必須です"
@@ -603,7 +603,7 @@ class FineTuningSubset(BaseSubset):
             custom_attributes=custom_attributes,
             validation_seed=validation_seed,
             validation_split=validation_split,
-            system_prompt=system_prompt
+            system_prompt=system_prompt,
             resize_interpolation=resize_interpolation,
         )
 
@@ -643,7 +643,7 @@ class ControlNetSubset(BaseSubset):
         custom_attributes: Optional[Dict[str, Any]] = None,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
         resize_interpolation: Optional[str] = None,
     ) -> None:
         assert image_dir is not None, "image_dir must be specified / image_dirは指定が必須です"
@@ -672,7 +672,7 @@ class ControlNetSubset(BaseSubset):
             custom_attributes=custom_attributes,
             validation_seed=validation_seed,
             validation_split=validation_split,
-            system_prompt=system_prompt
+            system_prompt=system_prompt,
             resize_interpolation=resize_interpolation,
         )
 

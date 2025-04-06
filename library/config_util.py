@@ -108,6 +108,7 @@ class BaseDatasetParams:
     debug_dataset: bool = False
     validation_seed: Optional[int] = None
     validation_split: float = 0.0
+    system_prompt: Optional[str] = None
     resize_interpolation: Optional[str] = None
 
 @dataclass
@@ -245,6 +246,7 @@ class ConfigSanitizer:
         "validation_split": float,
         "resolution": functools.partial(__validate_and_convert_scalar_or_twodim.__func__, int),
         "network_multiplier": float,
+        "system_prompt": str,
         "resize_interpolation": str,
     }
 
