@@ -157,8 +157,8 @@ class ModelOffloader(Offloader):
     supports forward offloading
     """
 
-    def __init__(self, blocks: list[nn.Module], num_blocks: int, blocks_to_swap: int, device: torch.device, debug: bool = False):
-        super().__init__(num_blocks, blocks_to_swap, device, debug)
+    def __init__(self, blocks: Union[list[nn.Module], nn.ModuleList], blocks_to_swap: int, device: torch.device, debug: bool = False):
+        super().__init__(len(blocks), blocks_to_swap, device, debug)
 
         # register backward hooks
         self.remove_handles = []
