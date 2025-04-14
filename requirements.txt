@@ -36,16 +36,15 @@ numpy<=2.0
 # for WD14 captioning (tensorflow)
 tensorflow
 # for WD14 captioning (onnx)
-onnx>=1.15.0
+onnx>=1.17.0
 # onnxruntime-gpu==1.18.1
 # onnxruntime==1.18.1
-# for cuda 12.x(default 11.8)
---extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
-onnxruntime-gpu>=1.18.1
+onnxruntime-gpu==1.20.2
 
 # for HunYuanDiT
 timm==1.0.11
-torch==2.5.1+cu124
+torch
+xformers
 
 # this is for onnx: 
 protobuf
@@ -57,6 +56,6 @@ rich==13.7.0
 sentencepiece==0.2.0
 # for kohya_ss library
 -e .
-triton-windows>=3.2.0.post15
-https://github.com/sdbds/flash-attention-for-windows/releases/download/2.7.4.post1/flash_attn-2.7.4.post1+cu124torch2.5.1cxx11abiFALSEfullbackward-cp310-cp310-win_amd64.whl
+triton-windows>=3.2.0.post17
+https://github.com/sdbds/flash-attention-for-windows/releases/download/311%2Btorch260%2Bcu126/flash_attn-2.7.4.post1+cu126torch2.6.0cxx11abiFALSEfullbackward-cp311-cp311-win_amd64.whl
 optree>=0.13.0
