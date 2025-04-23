@@ -2189,7 +2189,8 @@ class FineTuningDataset(BaseDataset):
         debug_dataset: bool,
         validation_seed: int,
         validation_split: float,
-        resize_interpolation: Optional[str],
+        system_prompt: Optional[str] = None,
+        resize_interpolation: Optional[str] = None,
     ) -> None:
         super().__init__(resolution, network_multiplier, debug_dataset, resize_interpolation)
 
@@ -2417,7 +2418,8 @@ class ControlNetDataset(BaseDataset):
         bucket_no_upscale: bool,
         debug_dataset: bool,
         validation_split: float,
-        validation_seed: Optional[int],        
+        validation_seed: Optional[int],
+        system_prompt: Optional[str] = None,
         resize_interpolation: Optional[str] = None,
     ) -> None:
         super().__init__(resolution, network_multiplier, debug_dataset, resize_interpolation)
