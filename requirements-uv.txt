@@ -64,7 +64,7 @@ filelock==3.13.1
     #   huggingface-hub
     #   torch
     #   transformers
-flash-attn @ https://github.com/sdbds/flash-attention-for-windows/releases/download/311%2Btorch260%2Bcu126/flash_attn-2.7.4.post1+cu126torch2.6.0cxx11abiFALSEfullbackward-cp311-cp311-win_amd64.whl
+flash-attn @ https://github.com/sdbds/flash-attention-for-windows/releases/download/torch270%2Bcu128/flash_attn-2.7.4.post1+cu128torch2.7.0cxx11abiFALSEfullbackward-cp311-cp311-win_amd64.whl
     # via -r requirements.txt
 flatbuffers==24.3.25
     # via
@@ -99,7 +99,9 @@ h5py==3.11.0
     #   tensorflow-intel
 heavyball==0.24.4
     # via -r requirements.txt
-huggingface-hub==0.24.5
+hf-xet==1.0.3
+    # via huggingface-hub
+huggingface-hub==0.30.2
     # via
     #   -r requirements.txt
     #   accelerate
@@ -182,7 +184,6 @@ numpy==1.26.3
     #   torchmetrics
     #   torchvision
     #   transformers
-    #   xformers
 onnx==1.17.0
     # via -r requirements.txt
 onnxruntime-gpu==1.20.2
@@ -299,6 +300,7 @@ setuptools==70.0.0
     #   lightning-utilities
     #   tensorboard
     #   tensorflow-intel
+    #   triton-windows
     #   wandb
 six==1.16.0
     # via
@@ -310,7 +312,7 @@ six==1.16.0
     #   tensorflow-intel
 smmap==5.0.1
     # via gitdb
-sympy==1.13.1
+sympy==1.13.3
     # via
     #   onnxruntime-gpu
     #   torch
@@ -336,7 +338,7 @@ toml==0.10.2
     # via -r requirements.txt
 toolz==0.12.1
     # via altair
-torch==2.6.0
+torch==2.7.0
     # via
     #   -r requirements.txt
     #   accelerate
@@ -351,12 +353,11 @@ torch==2.6.0
     #   torch-optimi
     #   torchmetrics
     #   torchvision
-    #   xformers
 torch-optimi==0.2.1
     # via -r requirements.txt
 torchmetrics==1.0.3
     # via pytorch-lightning
-torchvision==0.21.0
+torchvision==0.22.0
     # via timm
 tqdm==4.64.1
     # via
@@ -365,7 +366,7 @@ tqdm==4.64.1
     #   transformers
 transformers==4.44.2
     # via -r requirements.txt
-triton-windows==3.2.0.post17
+triton-windows==3.3.0.post19
     # via -r requirements.txt
 typing-extensions==4.12.2
     # via
@@ -393,8 +394,6 @@ wheel==0.44.0
     # via astunparse
 wrapt==1.16.0
     # via tensorflow-intel
-xformers==0.0.29.post3
-    # via -r requirements.txt
 yarl==1.11.1
     # via aiohttp
 zipp==3.20.1
