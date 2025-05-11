@@ -5720,6 +5720,11 @@ def load_target_model(args, weight_dtype, accelerator, unet_use_linear_projectio
 
 
 def patch_accelerator_for_fp16_training(accelerator):
+    
+    from accelerate import DistributedType
+    if accelerator.distributed_type == DistributedType.DEEPSPEED:
+        return
+    
     org_unscale_grads = accelerator.scaler._unscale_grads_
 
     def _unscale_grads_replacer(optimizer, inv_scale, found_inf, allow_fp16):
@@ -6436,6 +6441,11 @@ def line_to_prompt_dict(line: str) -> dict:
             m = re.match(r"l ([\d\.]+)", parg, re.IGNORECASE)
             if m:  # scale
                 prompt_dict["scale"] = float(m.group(1))
+                continue
+
+            m = re.match(r"g ([\d\.]+)", parg, re.IGNORECASE)
+            if m:  # guidance scale
+                prompt_dict["guidance_scale"] = float(m.group(1))
                 continue
 
             m = re.match(r"n (.+)", parg, re.IGNORECASE)
