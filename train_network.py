@@ -24,7 +24,7 @@ from accelerate.utils import set_seed
 from accelerate import Accelerator
 from diffusers import DDPMScheduler
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
-from library import deepspeed_utils, model_util, strategy_base, strategy_sd
+from library import deepspeed_utils, model_util, sai_model_spec, strategy_base, strategy_sd, sai_model_spec
 
 import library.train_util as train_util
 from library.train_util import DreamBoothDataset
@@ -175,7 +175,7 @@ class NetworkTrainer:
         if val_dataset_group is not None:
             val_dataset_group.verify_bucket_reso_steps(64)
 
-    def load_target_model(self, args, weight_dtype, accelerator):
+    def load_target_model(self, args, weight_dtype, accelerator) -> tuple:
         text_encoder, vae, unet, _ = train_util.load_target_model(args, weight_dtype, accelerator)
 
         # モデルに xformers とか memory efficient attention を組み込む
@@ -644,7 +644,7 @@ class NetworkTrainer:
         net_kwargs = {}
         if args.network_args is not None:
             for net_arg in args.network_args:
-                key, value = net_arg.split("=")
+                key, value = net_arg.split("=", 1)
                 net_kwargs[key] = value
 
         # if a new network is added in future, add if ~ then blocks for each network (;'∀')
@@ -1339,7 +1339,7 @@ class NetworkTrainer:
         )
         NUM_VALIDATION_TIMESTEPS = 4  # 200, 400, 600, 800 TODO make this configurable
         min_timestep = 0 if args.min_timestep is None else args.min_timestep
-        max_timestep = noise_scheduler.num_train_timesteps if args.max_timestep is None else args.max_timestep
+        max_timestep = noise_scheduler.config.num_train_timesteps if args.max_timestep is None else args.max_timestep
         validation_timesteps = np.linspace(min_timestep, max_timestep, (NUM_VALIDATION_TIMESTEPS + 2), dtype=int)[1:-1]
         validation_total_steps = validation_steps * len(validation_timesteps)
         original_args_min_timestep = args.min_timestep
@@ -1443,11 +1443,13 @@ class NetworkTrainer:
                     max_mean_logs = {"Keys Scaled": keys_scaled, "Average key norm": mean_norm}
                 else:
                     if hasattr(network, "weight_norms"):
-                        mean_norm = network.weight_norms().mean().item()
-                        mean_grad_norm = network.grad_norms().mean().item()
-                        mean_combined_norm = network.combined_weight_norms().mean().item()
                         weight_norms = network.weight_norms()
-                        maximum_norm = weight_norms.max().item() if weight_norms.numel() > 0 else None
+                        mean_norm = weight_norms.mean().item() if weight_norms is not None else None
+                        grad_norms = network.grad_norms()
+                        mean_grad_norm = grad_norms.mean().item() if grad_norms is not None else None
+                        combined_weight_norms = network.combined_weight_norms()
+                        mean_combined_norm = combined_weight_norms.mean().item() if combined_weight_norms is not None else None
+                        maximum_norm = weight_norms.max().item() if weight_norms is not None else None
                         keys_scaled = None
                         max_mean_logs = {}
                     else:
@@ -1465,6 +1467,7 @@ class NetworkTrainer:
                     self.sample_images(
                         accelerator, args, None, global_step, accelerator.device, vae, tokenizers, text_encoder, unet
                     )
+                    progress_bar.unpause()
 
                     # 指定ステップごとにモデルを保存
                     if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
@@ -1678,6 +1681,7 @@ class NetworkTrainer:
                         train_util.save_and_remove_state_on_epoch_end(args, accelerator, epoch + 1)
 
             self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizers, text_encoder, unet)
+            progress_bar.unpause()
             optimizer_train_fn()
 
             # end of epoch
@@ -1706,6 +1710,7 @@ def setup_parser() -> argparse.ArgumentParser:
 
     add_logging_arguments(parser)
     train_util.add_sd_models_arguments(parser)
+    sai_model_spec.add_model_spec_arguments(parser)
     train_util.add_dataset_arguments(parser, True, True, True)
     train_util.add_training_arguments(parser, True)
     train_util.add_masked_loss_arguments(parser)
