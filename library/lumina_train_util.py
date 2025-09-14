@@ -18,10 +18,11 @@ from library import lumina_models, strategy_base, strategy_lumina, train_util
 from library.flux_models import AutoEncoder
 from library.device_utils import init_ipex, clean_memory_on_device
 from library.sd3_train_utils import FlowMatchEulerDiscreteScheduler
+from library.safetensors_utils import mem_eff_save_file
 
 init_ipex()
 
-from .utils import setup_logging, mem_eff_save_file
+from .utils import setup_logging
 
 setup_logging()
 import logging
@@ -249,7 +250,7 @@ def sample_image_inference(
     accelerator: Accelerator,
     args: argparse.Namespace,
     nextdit: lumina_models.NextDiT,
-    gemma2_model: Gemma2Model,
+    gemma2_model: list[Gemma2Model],
     vae: AutoEncoder,
     save_dir: str,
     prompt_dicts: list[Dict[str, str]],
@@ -266,7 +267,7 @@ def sample_image_inference(
         accelerator (Accelerator): Accelerator object
         args (argparse.Namespace): Arguments object
         nextdit (lumina_models.NextDiT): NextDiT model
-        gemma2_model (Gemma2Model): Gemma2 model
+        gemma2_model (list[Gemma2Model]): Gemma2 model
         vae (AutoEncoder): VAE model
         save_dir (str): Directory to save images
         prompt_dict (Dict[str, str]): Prompt dictionary
@@ -330,12 +331,8 @@ def sample_image_inference(
         logger.info(f"renorm: {renorm_cfg}")
         # logger.info(f"sample_sampler: {sampler_name}")
 
-        system_prompt_special_token = "<Prompt Start>"
-        system_prompt = f"{args.system_prompt} {system_prompt_special_token} " if args.system_prompt else ""
 
-        # Apply system prompt to prompts
-        prompt = system_prompt + prompt
-        negative_prompt = negative_prompt
+        # No need to add system prompt here, as it has been handled in the tokenize_strategy
 
         # Get sample prompts from cache
         if sample_prompts_gemma2_outputs and prompt in sample_prompts_gemma2_outputs:
@@ -355,12 +352,12 @@ def sample_image_inference(
         if gemma2_model is not None:
             tokens_and_masks = tokenize_strategy.tokenize(prompt)
             gemma2_conds = encoding_strategy.encode_tokens(
-                tokenize_strategy, [gemma2_model], tokens_and_masks
+                tokenize_strategy, gemma2_model, tokens_and_masks
             )
 
-            tokens_and_masks = tokenize_strategy.tokenize(negative_prompt)
+            tokens_and_masks = tokenize_strategy.tokenize(negative_prompt, is_negative=True)
             neg_gemma2_conds = encoding_strategy.encode_tokens(
-                tokenize_strategy, [gemma2_model], tokens_and_masks
+                tokenize_strategy, gemma2_model, tokens_and_masks
             )
 
         # Unpack Gemma2 outputs
@@ -1046,16 +1043,16 @@ def add_lumina_train_arguments(parser: argparse.ArgumentParser):
         "--gemma2_max_token_length",
         type=int,
         default=None,
-        help="maximum token length for Gemma2. if omitted, 256 for schnell and 512 for dev"
-        " / Gemma2の最大トークン長。省略された場合、schnellの場合は256、devの場合は512",
+        help="maximum token length for Gemma2. if omitted, 256"
+        " / Gemma2の最大トークン長。省略された場合、256になります",
     )
 
     parser.add_argument(
         "--timestep_sampling",
         choices=["sigma", "uniform", "sigmoid", "shift", "nextdit_shift"],
-        default="sigma",
-        help="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid and NextDIT.1 shifting."
-        " / タイムステップをサンプリングする方法：sigma、random uniform、random normalのsigmoid、sigmoidのシフト、NextDIT.1のシフト。",
+        default="shift",
+        help="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid and NextDIT.1 shifting. Default is 'shift'."
+        " / タイムステップをサンプリングする方法：sigma、random uniform、random normalのsigmoid、sigmoidのシフト、NextDIT.1のシフト。デフォルトは'shift'です。",
     )
     parser.add_argument(
         "--sigmoid_scale",
@@ -1066,7 +1063,7 @@ def add_lumina_train_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--model_prediction_type",
         choices=["raw", "additive", "sigma_scaled"],
-        default="sigma_scaled",
+        default="raw",
         help="How to interpret and process the model prediction: "
         "raw (use as is), additive (add to noisy input), sigma_scaled (apply sigma scaling)."
         " / モデル予測の解釈と処理方法："

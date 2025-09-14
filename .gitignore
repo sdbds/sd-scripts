@@ -7,3 +7,8 @@ build
 .vscode
 wandb
 k_diffusion
+CLAUDE.md
+GEMINI.md
+.claude
+.gemini
+MagicMock

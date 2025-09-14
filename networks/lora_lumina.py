@@ -344,7 +344,7 @@ def create_network(
         if embedder_dims.startswith("[") and embedder_dims.endswith("]"):
             embedder_dims = embedder_dims[1:-1]
         embedder_dims = [int(d) for d in embedder_dims.split(",")]
-        assert len(embedder_dims) == 3, f"invalid embedder_dims: {embedder_dims}, must be 4 dimensions (x_embedder, t_embedder, cap_embedder)"
+        assert len(embedder_dims) == 3, f"invalid embedder_dims: {embedder_dims}, must be 3 dimensions (x_embedder, t_embedder, cap_embedder)"
 
     # rank/module dropout
     rank_dropout = kwargs.get("rank_dropout", None)
@@ -562,23 +562,26 @@ class LoRANetwork(torch.nn.Module):
 
                         # Set dim/alpha to modules dim/alpha
                         if modules_dim is not None and modules_alpha is not None:
-                            # モジュール指定あり
+                            # network from weights
                             if lora_name in modules_dim:
                                 dim = modules_dim[lora_name]
                                 alpha = modules_alpha[lora_name]
+                            else:
+                                dim = 0 # skip if not found
 
-                        # Set dims to type_dims
-                        if is_lumina and type_dims is not None:
-                            identifier = [
-                                ("attention",),  # attention layers
-                                ("mlp",),       # MLP layers
-                                ("modulation",), # modulation layers
-                                ("refiner",),   # refiner blocks
-                            ]
-                            for i, d in enumerate(type_dims):
-                                if d is not None and all([id in lora_name for id in identifier[i]]):
-                                    dim = d  # may be 0 for skip
-                                    break
+                        else:
+                            # Set dims to type_dims
+                            if is_lumina and type_dims is not None:
+                                identifier = [
+                                    ("attention",),  # attention layers
+                                    ("mlp",),       # MLP layers
+                                    ("modulation",), # modulation layers
+                                    ("refiner",),   # refiner blocks
+                                ]
+                                for i, d in enumerate(type_dims):
+                                    if d is not None and all([id in lora_name for id in identifier[i]]):
+                                        dim = d  # may be 0 for skip
+                                        break
 
                         # Drop blocks if we are only training some blocks
                         if (
