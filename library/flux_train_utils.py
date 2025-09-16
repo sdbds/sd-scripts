@@ -497,6 +497,52 @@ def get_noisy_model_input_and_timesteps(
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))  # we are pre-packed so must adjust for packed size
         sigmas = time_shift(mu, 1.0, sigmas)
         timesteps = sigmas * num_timesteps
+    elif args.timestep_sampling == "logsnr":
+        # https://arxiv.org/abs/2411.14793v3
+        logsnr = torch.normal(mean=args.logit_mean, std=args.logit_std, size=(batch_size,), device=device)
+        timesteps = torch.sigmoid(-logsnr / 2)
+
+    elif args.timestep_sampling.startswith("qinglong"):
+        # Qinglong triple hybrid sampling: mid_shift:logsnr:logsnr2 = .80:.075:.125
+        # First decide which method to use for each sample independently
+        decision_t = torch.rand((batch_size,), device=device)
+
+        # Create masks based on decision_t: 0.79 for mid_shift, 0.9 for logsnr, and 0.1 for logsnr2
+        mid_mask = decision_t < 0.79
+        logsnr_mask = (decision_t >= 0.79) & (decision_t < 0.9)
+        logsnr_mask2 = decision_t >= 0.9
+
+        # Initialize output tensor
+        timesteps = torch.zeros((batch_size,), device=device)
+
+        # Generate mid_shift samples for selected indices (79%)
+        if mid_mask.any():
+            mid_count = mid_mask.sum().item()
+            h, w = latents.shape[-2:]
+            mu = train_utils.get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))
+            shift = math.exp(mu)
+            logits_norm_mid = torch.randn(mid_count, device=device)
+            logits_norm_mid = logits_norm_mid * args.sigmoid_scale
+            t_mid = logits_norm_mid.sigmoid()
+            t_mid = (t_mid * shift) / (1 + (shift - 1) * t_mid)
+
+            timesteps[mid_mask] = t_mid
+
+        # Generate logsnr samples for selected indices (11%)
+        if logsnr_mask.any():
+            logsnr_count = logsnr_mask.sum().item()
+            logsnr = torch.normal(mean=args.logit_mean, std=args.logit_std, size=(logsnr_count,), device=device)
+            t_logsnr = torch.sigmoid(-logsnr / 2)
+
+            timesteps[logsnr_mask] = t_logsnr
+
+        # Generate logsnr2 samples with -logit_mean for selected indices (10%)
+        if logsnr_mask2.any():
+            logsnr2_count = logsnr_mask2.sum().item()
+            logsnr2 = torch.normal(mean=5.36, std=1.0, size=(logsnr2_count,), device=device)
+            t_logsnr2 = torch.sigmoid(-logsnr2 / 2)
+
+            timesteps[logsnr_mask2] = t_logsnr2
     else:
         # Sample a random timestep for each image
         # for weighting schemes where we sample timesteps non-uniformly
@@ -654,7 +700,7 @@ def add_flux_train_arguments(parser: argparse.ArgumentParser):
 
     parser.add_argument(
         "--timestep_sampling",
-        choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift"],
+        choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift", "logsnr", "qinglong_flux"],
         default="sigma",
         help="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid and FLUX.1 shifting."
         " / タイムステップをサンプリングする方法：sigma、random uniform、random normalのsigmoid、sigmoidのシフト、FLUX.1のシフト。",
