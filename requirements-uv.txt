@@ -77,7 +77,9 @@ h5py==3.14.0
     #   tensorflow
 heavyball==1.7.2
     # via -r ./requirements.txt
-huggingface-hub==0.34.3
+hf-xet==1.1.10
+    # via huggingface-hub
+huggingface-hub==0.34.6
     # via
     #   -r ./requirements.txt
     #   accelerate
