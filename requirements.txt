@@ -46,7 +46,7 @@ onnxruntime-gpu>=1.20.2 ; sys_platform == 'linux'
 
 # for HunYuanDiT
 timm==1.0.11
-torch==2.7.0
+torch==2.8.0
 xformers
 
 # this is for onnx: 
@@ -60,6 +60,6 @@ sentencepiece==0.2.1
 # for kohya_ss library
 -e .
 triton-windows>=3.3.0.post19 ; sys_platform == 'win32'
-https://github.com/sdbds/flash-attention-for-windows/releases/download/torch270%2Bcu128/flash_attn-2.7.4.post1+cu128torch2.7.0cxx11abiFALSEfullbackward-cp311-cp311-win_amd64.whl ; sys_platform == 'win32'
+https://github.com/sdbds/flash-attention-for-windows/releases/download/2.8.3/flash_attn-2.8.3+cu128torch2.8.0cxx11abiFALSEfullbackward-cp311-cp311-win_amd64.whl ; sys_platform == 'win32'
 git+https://github.com/Dao-AILab/flash-attention; sys_platform == 'linux'
 optree>=0.13.0
