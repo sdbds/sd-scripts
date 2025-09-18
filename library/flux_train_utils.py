@@ -499,34 +499,34 @@ def get_noisy_model_input_and_timesteps(
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "logsnr":
         # https://arxiv.org/abs/2411.14793v3
-        logsnr = torch.normal(mean=args.logit_mean, std=args.logit_std, size=(batch_size,), device=device)
-        timesteps = torch.sigmoid(-logsnr / 2)
+        logsnr = torch.normal(mean=args.logit_mean, std=args.logit_std, size=(bsz,), device=device)
+        sigmas = torch.sigmoid(-logsnr / 2)
+        timesteps = sigmas * num_timesteps
 
     elif args.timestep_sampling.startswith("qinglong"):
         # Qinglong triple hybrid sampling: mid_shift:logsnr:logsnr2 = .80:.075:.125
         # First decide which method to use for each sample independently
-        decision_t = torch.rand((batch_size,), device=device)
+        decision_t = torch.rand((bsz,), device=device)
 
         # Create masks based on decision_t: 0.79 for mid_shift, 0.9 for logsnr, and 0.1 for logsnr2
         mid_mask = decision_t < 0.79
         logsnr_mask = (decision_t >= 0.79) & (decision_t < 0.9)
         logsnr_mask2 = decision_t >= 0.9
 
-        # Initialize output tensor
-        timesteps = torch.zeros((batch_size,), device=device)
+        # Initialize output tensors
+        sigmas = torch.zeros((bsz,), device=device)
 
         # Generate mid_shift samples for selected indices (79%)
         if mid_mask.any():
             mid_count = mid_mask.sum().item()
-            h, w = latents.shape[-2:]
-            mu = train_utils.get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))
-            shift = math.exp(mu)
             logits_norm_mid = torch.randn(mid_count, device=device)
             logits_norm_mid = logits_norm_mid * args.sigmoid_scale
             t_mid = logits_norm_mid.sigmoid()
-            t_mid = (t_mid * shift) / (1 + (shift - 1) * t_mid)
+            mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))
+            shift = math.exp(mu)
+            t_mid = time_shift(mu, 1.0, t_mid)
 
-            timesteps[mid_mask] = t_mid
+            sigmas[mid_mask] = t_mid
 
         # Generate logsnr samples for selected indices (11%)
         if logsnr_mask.any():
@@ -534,7 +534,7 @@ def get_noisy_model_input_and_timesteps(
             logsnr = torch.normal(mean=args.logit_mean, std=args.logit_std, size=(logsnr_count,), device=device)
             t_logsnr = torch.sigmoid(-logsnr / 2)
 
-            timesteps[logsnr_mask] = t_logsnr
+            sigmas[logsnr_mask] = t_logsnr
 
         # Generate logsnr2 samples with -logit_mean for selected indices (10%)
         if logsnr_mask2.any():
@@ -542,7 +542,9 @@ def get_noisy_model_input_and_timesteps(
             logsnr2 = torch.normal(mean=5.36, std=1.0, size=(logsnr2_count,), device=device)
             t_logsnr2 = torch.sigmoid(-logsnr2 / 2)
 
-            timesteps[logsnr_mask2] = t_logsnr2
+            sigmas[logsnr_mask2] = t_logsnr2
+        # scale timesteps to scheduler domain
+        timesteps = sigmas * num_timesteps
     else:
         # Sample a random timestep for each image
         # for weighting schemes where we sample timesteps non-uniformly
