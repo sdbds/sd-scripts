@@ -2,7 +2,6 @@ import argparse
 import copy
 import gc
 from typing import Any, Optional, Union, cast
-import argparse
 import os
 import time
 from types import SimpleNamespace
@@ -250,7 +249,15 @@ def sample_image_inference(
         arg_c_null = None
 
     gen_args = SimpleNamespace(
-        image_size=(height, width), infer_steps=sample_steps, flow_shift=flow_shift, guidance_scale=cfg_scale, fp8=args.fp8_scaled
+        image_size=(height, width),
+        infer_steps=sample_steps,
+        flow_shift=flow_shift,
+        guidance_scale=cfg_scale,
+        fp8=args.fp8_scaled,
+        apg_start_step_ocr=38,
+        apg_start_step_general=5,
+        guidance_rescale=0.0,
+        guidance_rescale_apg=0.0,
     )
 
     from hunyuan_image_minimal_inference import generate_body  # import here to avoid circular import
@@ -350,7 +357,7 @@ class HunyuanImageNetworkTrainer(train_network.NetworkTrainer):
         self.is_swapping_blocks = args.blocks_to_swap is not None and args.blocks_to_swap > 0
 
         vl_dtype = torch.float8_e4m3fn if args.fp8_vl else torch.bfloat16
-        vl_device = "cpu"
+        vl_device = "cpu"  # loading to cpu and move to gpu later in cache_text_encoder_outputs_if_needed
         _, text_encoder_vlm = hunyuan_image_text_encoder.load_qwen2_5_vl(
             args.text_encoder, dtype=vl_dtype, device=vl_device, disable_mmap=args.disable_mmap_load_safetensors
         )
@@ -358,12 +365,11 @@ class HunyuanImageNetworkTrainer(train_network.NetworkTrainer):
             args.byt5, dtype=torch.float16, device=vl_device, disable_mmap=args.disable_mmap_load_safetensors
         )
 
-        vae = hunyuan_image_vae.load_vae(args.vae, "cpu", disable_mmap=args.disable_mmap_load_safetensors)
+        vae = hunyuan_image_vae.load_vae(
+            args.vae, "cpu", disable_mmap=args.disable_mmap_load_safetensors, chunk_size=args.vae_chunk_size
+        )
         vae.to(dtype=torch.float16)  # VAE is always fp16
         vae.eval()
-        if args.vae_enable_tiling:
-            vae.enable_tiling()
-            logger.info("VAE tiling is enabled")
 
         model_version = hunyuan_image_utils.MODEL_VERSION_2_1
         return model_version, [text_encoder_vlm, text_encoder_byt5], vae, None  # unet will be loaded later
@@ -379,18 +385,19 @@ class HunyuanImageNetworkTrainer(train_network.NetworkTrainer):
 
         loading_dtype = None if args.fp8_scaled else weight_dtype
         loading_device = "cpu" if self.is_swapping_blocks else accelerator.device
-        split_attn = True
 
         attn_mode = "torch"
         if args.xformers:
             attn_mode = "xformers"
-            logger.info("xformers is enabled for attention")
+        if args.attn_mode is not None:
+            attn_mode = args.attn_mode
 
+        logger.info(f"Loading DiT model with attn_mode: {attn_mode}, split_attn: {args.split_attn}, fp8_scaled: {args.fp8_scaled}")
         model = hunyuan_image_models.load_hunyuan_image_model(
             accelerator.device,
             args.pretrained_model_name_or_path,
             attn_mode,
-            split_attn,
+            args.split_attn,
             loading_device,
             loading_dtype,
             args.fp8_scaled,
@@ -439,6 +446,7 @@ class HunyuanImageNetworkTrainer(train_network.NetworkTrainer):
     def cache_text_encoder_outputs_if_needed(
         self, args, accelerator: Accelerator, unet, vae, text_encoders, dataset: train_util.DatasetGroup, weight_dtype
     ):
+        vlm_device = "cpu" if args.text_encoder_cpu else accelerator.device
         if args.cache_text_encoder_outputs:
             if not args.lowram:
                 # メモリ消費を減らす
@@ -447,9 +455,9 @@ class HunyuanImageNetworkTrainer(train_network.NetworkTrainer):
                 vae.to("cpu")
                 clean_memory_on_device(accelerator.device)
 
-            logger.info("move text encoders to gpu")
-            text_encoders[0].to(accelerator.device)
-            text_encoders[1].to(accelerator.device)
+            logger.info(f"move text encoders to {vlm_device} to encode and cache text encoder outputs")
+            text_encoders[0].to(vlm_device)
+            text_encoders[1].to(vlm_device)
 
             # VLM (bf16) and byT5 (fp16) are used for encoding, so we cannot use autocast here
             dataset.new_cache_text_encoder_outputs(text_encoders, accelerator)
@@ -490,8 +498,8 @@ class HunyuanImageNetworkTrainer(train_network.NetworkTrainer):
                 vae.to(org_vae_device)
         else:
             # Text Encoderから毎回出力を取得するので、GPUに乗せておく
-            text_encoders[0].to(accelerator.device)
-            text_encoders[1].to(accelerator.device)
+            text_encoders[0].to(vlm_device)
+            text_encoders[1].to(vlm_device)
 
     def sample_images(self, accelerator, args, epoch, global_step, device, ae, tokenizer, text_encoder, flux):
         text_encoders = text_encoder  # for compatibility
@@ -666,12 +674,30 @@ def setup_parser() -> argparse.ArgumentParser:
         default=5.0,
         help="Discrete flow shift for the Euler Discrete Scheduler, default is 5.0. / Euler Discrete Schedulerの離散フローシフト、デフォルトは5.0。",
     )
-    parser.add_argument("--fp8_scaled", action="store_true", help="use scaled fp8 for DiT / DiTにスケーリングされたfp8を使う")
-    parser.add_argument("--fp8_vl", action="store_true", help="use fp8 for VLM text encoder / VLMテキストエンコーダにfp8を使用する")
+    parser.add_argument("--fp8_scaled", action="store_true", help="Use scaled fp8 for DiT / DiTにスケーリングされたfp8を使う")
+    parser.add_argument("--fp8_vl", action="store_true", help="Use fp8 for VLM text encoder / VLMテキストエンコーダにfp8を使用する")
     parser.add_argument(
-        "--vae_enable_tiling",
+        "--text_encoder_cpu", action="store_true", help="Inference on CPU for Text Encoders / テキストエンコーダをCPUで推論する"
+    )
+    parser.add_argument(
+        "--vae_chunk_size",
+        type=int,
+        default=None,  # default is None (no chunking)
+        help="Chunk size for VAE decoding to reduce memory usage. Default is None (no chunking). 16 is recommended if enabled"
+        " / メモリ使用量を減らすためのVAEデコードのチャンクサイズ。デフォルトはNone（チャンクなし）。有効にする場合は16程度を推奨。",
+    )
+
+    parser.add_argument(
+        "--attn_mode",
+        choices=["torch", "xformers", "flash", "sageattn", "sdpa"],  # "sdpa" is for backward compatibility
+        default=None,
+        help="Attention implementation to use. Default is None (torch). xformers requires --split_attn. sageattn does not support training (inference only). This option overrides --xformers or --sdpa."
+        " / 使用するAttentionの実装。デフォルトはNone（torch）です。xformersは--split_attnの指定が必要です。sageattnはトレーニングをサポートしていません（推論のみ）。このオプションは--xformersまたは--sdpaを上書きします。",
+    )
+    parser.add_argument(
+        "--split_attn",
         action="store_true",
-        help="Enable tiling for VAE decoding and encoding / VAEデコーディングとエンコーディングのタイルを有効にする",
+        help="split attention computation to reduce memory usage / メモリ使用量を減らすためにattention時にバッチを分割する",
     )
 
     return parser
@@ -683,6 +709,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     train_util.verify_command_line_training_args(args)
     args = train_util.read_config_from_file(args, parser)
+
+    if args.attn_mode == "sdpa":
+        args.attn_mode = "torch"  # backward compatibility
 
     trainer = HunyuanImageNetworkTrainer()
     trainer.train(args)

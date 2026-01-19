@@ -69,6 +69,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--guidance_scale", type=float, default=3.5, help="Guidance scale for classifier free guidance. Default is 3.5."
     )
+    parser.add_argument(
+        "--apg_start_step_ocr",
+        type=int,
+        default=38,
+        help="Starting step for Adaptive Projected Guidance (APG) for image with text. Default is 38. Should be less than infer_steps, usually near the end.",
+    )
+    parser.add_argument(
+        "--apg_start_step_general",
+        type=int,
+        default=5,
+        help="Starting step for Adaptive Projected Guidance (APG) for general image. Default is 5. Should be less than infer_steps, usually near the beginning.",
+    )
+    parser.add_argument(
+        "--guidance_rescale",
+        type=float,
+        default=0.0,
+        help="Guidance rescale factor for steps without APG, 0.0 to 1.0. Default is 0.0 (no rescale).",
+    )
+    parser.add_argument(
+        "--guidance_rescale_apg",
+        type=float,
+        default=0.0,
+        help="Guidance rescale factor for steps with APG, 0.0 to 1.0. Default is 0.0 (no rescale).",
+    )
     parser.add_argument("--prompt", type=str, default=None, help="prompt for generation")
     parser.add_argument("--negative_prompt", type=str, default="", help="negative prompt for generation, default is empty string")
     parser.add_argument("--image_size", type=int, nargs=2, default=[2048, 2048], help="image size, height and width")
@@ -88,7 +112,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fp8_scaled", action="store_true", help="use scaled fp8 for DiT, only for fp8")
 
     parser.add_argument("--text_encoder_cpu", action="store_true", help="Inference on CPU for Text Encoders")
-    parser.add_argument("--vae_enable_tiling", action="store_true", help="Enable tiling for VAE decoding")
+    parser.add_argument(
+        "--vae_chunk_size",
+        type=int,
+        default=None,  # default is None (no chunking)
+        help="Chunk size for VAE decoding to reduce memory usage. Default is None (no chunking). 16 is recommended if enabled"
+        " / メモリ使用量を減らすためのVAEデコードのチャンクサイズ。デフォルトはNone（チャンクなし）。有効にする場合は16程度を推奨。",
+    )
     parser.add_argument(
         "--device", type=str, default=None, help="device to use for inference. If None, use CUDA if available, otherwise use CPU"
     )
@@ -96,7 +126,7 @@ def parse_args() -> argparse.Namespace:
         "--attn_mode",
         type=str,
         default="torch",
-        choices=["flash", "torch", "sageattn", "xformers", "sdpa"],  #  "flash2", "flash3",
+        choices=["flash", "torch", "sageattn", "xformers", "sdpa"],  #  "sdpa" for backward compatibility
         help="attention mode",
     )
     parser.add_argument("--blocks_to_swap", type=int, default=0, help="number of blocks to swap in the model")
@@ -129,6 +159,9 @@ def parse_args() -> argparse.Namespace:
 
     if args.lycoris and not lycoris_available:
         raise ValueError("install lycoris: https://github.com/KohakuBlueleaf/LyCORIS")
+
+    if args.attn_mode == "sdpa":
+        args.attn_mode = "torch"  # backward compatibility
 
     return args
 
@@ -265,7 +298,7 @@ def load_dit_model(
         device,
         args.dit,
         args.attn_mode,
-        False,
+        True,  # enable split_attn to trim masked tokens
         loading_device,
         loading_weight_dtype,
         args.fp8_scaled and not args.lycoris,
@@ -428,14 +461,10 @@ def merge_lora_weights(
 # endregion
 
 
-def decode_latent(vae: HunyuanVAE2D, latent: torch.Tensor, device: torch.device, enable_tiling: bool = False) -> torch.Tensor:
+def decode_latent(vae: HunyuanVAE2D, latent: torch.Tensor, device: torch.device) -> torch.Tensor:
     logger.info(f"Decoding image. Latent shape {latent.shape}, device {device}")
 
     vae.to(device)
-    if enable_tiling:
-        vae.enable_tiling()
-    else:
-        vae.disable_tiling()
     with torch.no_grad():
         latent = latent / vae.scaling_factor  # scale latent back to original range
         pixels = vae.decode(latent.to(device, dtype=vae.dtype))
@@ -672,10 +701,18 @@ def generate_body(
 
     # Prepare Guider
     cfg_guider_ocr = hunyuan_image_utils.AdaptiveProjectedGuidance(
-        guidance_scale=10.0, eta=0.0, adaptive_projected_guidance_rescale=10.0, adaptive_projected_guidance_momentum=-0.5
+        guidance_scale=10.0,
+        eta=0.0,
+        adaptive_projected_guidance_rescale=10.0,
+        adaptive_projected_guidance_momentum=-0.5,
+        guidance_rescale=args.guidance_rescale_apg,
     )
     cfg_guider_general = hunyuan_image_utils.AdaptiveProjectedGuidance(
-        guidance_scale=10.0, eta=0.0, adaptive_projected_guidance_rescale=10.0, adaptive_projected_guidance_momentum=-0.5
+        guidance_scale=10.0,
+        eta=0.0,
+        adaptive_projected_guidance_rescale=10.0,
+        adaptive_projected_guidance_momentum=-0.5,
+        guidance_rescale=args.guidance_rescale_apg,
     )
 
     # Denoising loop
@@ -710,8 +747,11 @@ def generate_body(
                     ocr_mask[0],
                     args.guidance_scale,
                     i,
+                    apg_start_step_ocr=args.apg_start_step_ocr,
+                    apg_start_step_general=args.apg_start_step_general,
                     cfg_guider_ocr=cfg_guider_ocr,
                     cfg_guider_general=cfg_guider_general,
+                    guidance_rescale=args.guidance_rescale,
                 )
 
             # ensure latents dtype is consistent
@@ -804,7 +844,7 @@ def save_output(
     vae: HunyuanVAE2D,
     latent: torch.Tensor,
     device: torch.device,
-    original_base_names: Optional[List[str]] = None,
+    original_base_name: Optional[str] = None,
 ) -> None:
     """save output
 
@@ -813,7 +853,7 @@ def save_output(
         vae: VAE model
         latent: latent tensor
         device: device to use
-        original_base_names: original base names (if latents are loaded from files)
+        original_base_name: original base name (if latents are loaded from files)
     """
     height, width = latent.shape[-2], latent.shape[-1]  # BCTHW
     height *= hunyuan_image_vae.VAE_SCALE_FACTOR
@@ -836,14 +876,14 @@ def save_output(
             1, vae.latent_channels, height // hunyuan_image_vae.VAE_SCALE_FACTOR, width // hunyuan_image_vae.VAE_SCALE_FACTOR
         )
 
-    image = decode_latent(vae, latent, device, args.vae_enable_tiling)
+    image = decode_latent(vae, latent, device)
 
     if args.output_type == "images" or args.output_type == "latent_images":
         # save images
-        if original_base_names is None or len(original_base_names) == 0:
+        if original_base_name is None:
             original_name = ""
         else:
-            original_name = f"_{original_base_names[0]}"
+            original_name = f"_{original_base_name}"
         save_images(image, args, original_name)
 
 
@@ -916,7 +956,7 @@ def process_batch_prompts(prompts_data: List[Dict], args: argparse.Namespace) ->
 
     # 1. Prepare VAE
     logger.info("Loading VAE for batch generation...")
-    vae_for_batch = hunyuan_image_vae.load_vae(args.vae, device="cpu", disable_mmap=True)
+    vae_for_batch = hunyuan_image_vae.load_vae(args.vae, device="cpu", disable_mmap=True, chunk_size=args.vae_chunk_size)
     vae_for_batch.eval()
 
     all_prompt_args_list = [apply_overrides(args, pd) for pd in prompts_data]  # Create all arg instances first
@@ -961,7 +1001,7 @@ def process_batch_prompts(prompts_data: List[Dict], args: argparse.Namespace) ->
         all_precomputed_text_data.append(text_data)
 
     # Models should be removed from device after prepare_text_inputs
-    del tokenizer_batch, text_encoder_batch, temp_shared_models_txt, conds_cache_batch
+    del tokenizer_vlm, text_encoder_vlm_batch, tokenizer_byt5, text_encoder_byt5_batch, temp_shared_models_txt, conds_cache_batch
     gc.collect()  # Force cleanup of Text Encoder from GPU memory
     clean_memory_on_device(device)
 
@@ -1035,7 +1075,7 @@ def process_batch_prompts(prompts_data: List[Dict], args: argparse.Namespace) ->
             # save_output expects latent to be [BCTHW] or [CTHW]. generate returns [BCTHW] (batch size 1).
             # latent[0] is correct if generate returns it with batch dim.
             # The latent from generate is (1, C, T, H, W)
-            save_output(current_args, vae_for_batch, latent[0], device)  # Pass vae_for_batch
+            save_output(current_args, vae_for_batch, latent, device)  # Pass vae_for_batch
 
         vae_for_batch.to("cpu")  # Move VAE back to CPU
 
@@ -1054,7 +1094,7 @@ def process_interactive(args: argparse.Namespace) -> None:
     shared_models = load_shared_models(args)
     shared_models["conds_cache"] = {}  # Initialize empty cache for interactive mode
 
-    vae = hunyuan_image_vae.load_vae(args.vae, device="cpu", disable_mmap=True)
+    vae = hunyuan_image_vae.load_vae(args.vae, device="cpu", disable_mmap=True, chunk_size=args.vae_chunk_size)
     vae.eval()
 
     print("Interactive mode. Enter prompts (Ctrl+D or Ctrl+Z (Windows) to exit):")
@@ -1182,9 +1222,9 @@ def main():
         for i, latent in enumerate(latents_list):
             args.seed = seeds[i]
 
-            vae = hunyuan_image_vae.load_vae(args.vae, device=device, disable_mmap=True)
+            vae = hunyuan_image_vae.load_vae(args.vae, device=device, disable_mmap=True, chunk_size=args.vae_chunk_size)
             vae.eval()
-            save_output(args, vae, latent, device, original_base_names)
+            save_output(args, vae, latent, device, original_base_names[i])
 
     elif args.from_file:
         # Batch mode from file
@@ -1217,7 +1257,7 @@ def main():
         clean_memory_on_device(device)
 
         # Save latent and video
-        vae = hunyuan_image_vae.load_vae(args.vae, device="cpu", disable_mmap=True)
+        vae = hunyuan_image_vae.load_vae(args.vae, device="cpu", disable_mmap=True, chunk_size=args.vae_chunk_size)
         vae.eval()
         save_output(args, vae, latent, device)
 

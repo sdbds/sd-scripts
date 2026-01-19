@@ -123,10 +123,12 @@ accelerate launch --num_cpu_threads_per_process 1 hunyuan_image_train_network.py
   --network_module=networks.lora_hunyuan_image \
   --network_dim=16 \
   --network_alpha=1 \
+  --network_train_unet_only \
   --learning_rate=1e-4 \
   --optimizer_type="AdamW8bit" \
   --lr_scheduler="constant" \
-  --sdpa \
+  --attn_mode="torch" \
+  --split_attn \
   --max_train_epochs=10 \
   --save_every_n_epochs=1 \
   --mixed_precision="bf16" \
@@ -137,6 +139,8 @@ accelerate launch --num_cpu_threads_per_process 1 hunyuan_image_train_network.py
   --cache_text_encoder_outputs \
   --cache_latents
 ```
+
+**HunyuanImage-2.1 training does not support LoRA modules for Text Encoders, so `--network_train_unet_only` is required.**
 
 <details>
 <summary>日本語</summary>
@@ -164,6 +168,8 @@ The script adds HunyuanImage-2.1 specific arguments. For common arguments (like 
 
 #### HunyuanImage-2.1 Training Parameters
 
+* `--network_train_unet_only` **[Required]**
+  - Specifies that only the DiT model will be trained. LoRA modules for Text Encoders are not supported.
 * `--discrete_flow_shift=<float>`
   - Specifies the shift value for the scheduler used in Flow Matching. Default is `5.0`.
 * `--model_prediction_type=<choice>`
@@ -175,18 +181,24 @@ The script adds HunyuanImage-2.1 specific arguments. For common arguments (like 
 
 #### Memory/Speed Related
 
+* `--attn_mode=<choice>`
+  - Specifies the attention implementation to use. Options are `torch`, `xformers`, `flash`, `sageattn`. Default is `torch` (use scaled dot product attention). Each library must be installed separately other than `torch`. If using `xformers`, also specify `--split_attn` if the batch size is more than 1.
+* `--split_attn`
+  - Splits the batch during attention computation to process one item at a time, reducing VRAM usage by avoiding attention mask computation. Can improve speed when using `torch`. Required when using `xformers` with batch size greater than 1.
 * `--fp8_scaled`
-  - Enables training the DiT model in scaled FP8 format. This can significantly reduce VRAM usage (can run with as little as 8GB VRAM when combined with `--blocks_to_swap`), but the training results may vary. This is a newer alternative to the unsupported `--fp8_base` option.
+  - Enables training the DiT model in scaled FP8 format. This can significantly reduce VRAM usage (can run with as little as 8GB VRAM when combined with `--blocks_to_swap`), but the training results may vary. This is a newer alternative to the unsupported `--fp8_base` option. See [Musubi Tuner's documentation](https://github.com/kohya-ss/musubi-tuner/blob/main/docs/advanced_config.md#fp8-weight-optimization-for-models--%E3%83%A2%E3%83%87%E3%83%AB%E3%81%AE%E9%87%8D%E3%81%BF%E3%81%AEfp8%E3%81%B8%E3%81%AE%E6%9C%80%E9%81%A9%E5%8C%96) for details.
 * `--fp8_vl`
   - Use FP8 for the VLM (Qwen2.5-VL) text encoder.
+* `--text_encoder_cpu`
+  - Runs the text encoders on CPU to reduce VRAM usage. This is useful when VRAM is insufficient (less than 12GB). Encoding one text may take a few minutes (depending on CPU). It is highly recommended to use this option with `--cache_text_encoder_outputs_to_disk` to avoid repeated encoding every time training starts. **In addition, increasing `--num_cpu_threads_per_process` in the `accelerate launch` command, like `--num_cpu_threads_per_process=8` or `16`, can speed up encoding in some environments.**
 * `--blocks_to_swap=<integer>` **[Experimental Feature]**
   - Setting to reduce VRAM usage by swapping parts of the model (Transformer blocks) between CPU and GPU. Specify the number of blocks to swap as an integer (e.g., `18`). Larger values reduce VRAM usage but decrease training speed. Adjust according to your GPU's VRAM capacity. Can be used with `gradient_checkpointing`.
 * `--cache_text_encoder_outputs`
   - Caches the outputs of Qwen2.5-VL and byT5. This reduces memory usage.
 * `--cache_latents`, `--cache_latents_to_disk`
   - Caches the outputs of VAE. Similar functionality to [sdxl_train_network.py](sdxl_train_network.md).
-* `--vae_enable_tiling`
-  - Enables tiling for VAE encoding and decoding to reduce VRAM usage.
+* `--vae_chunk_size=<integer>`
+  - Enables chunked processing in the VAE to reduce VRAM usage during encoding and decoding. Specify the chunk size as an integer (e.g., `16`). Larger values use more VRAM but are faster. Default is `None` (no chunking). This option is useful when VRAM is limited (e.g., 8GB or 12GB).
 
 <details>
 <summary>日本語</summary>
@@ -429,6 +441,7 @@ python hunyuan_image_minimal_inference.py \
   --vae "<path to hunyuan_image_2.1_vae_fp16.safetensors>" \
   --lora_weight "<path to your trained LoRA>" \
   --lora_multiplier 1.0 \
+  --attn_mode "torch" \
   --prompt "A cute cartoon penguin in a snowy landscape" \
   --image_size 2048 2048 \
   --infer_steps 50 \
@@ -441,9 +454,16 @@ python hunyuan_image_minimal_inference.py \
 **Key Options:**
 - `--fp8_scaled`: Use scaled FP8 format for reduced VRAM usage during inference
 - `--blocks_to_swap`: Swap blocks to CPU to reduce VRAM usage
-- `--image_size`: Resolution (inference is most stable at 2048x2048)
+- `--image_size`: Resolution in **height width**  (inference is most stable at 2560x1536, 2304x1792, 2048x2048, 1792x2304, 1536x2560 according to the official repo)
 - `--guidance_scale`: CFG scale (default: 3.5)
 - `--flow_shift`: Flow matching shift parameter (default: 5.0)
+- `--text_encoder_cpu`: Run the text encoders on CPU to reduce VRAM usage
+- `--vae_chunk_size`: Chunk size for VAE decoding to reduce memory usage (default: None, no chunking). 16 is recommended if enabled.
+- `--apg_start_step_general` and `--apg_start_step_ocr`: Start steps for APG (Adaptive Projected Guidance) if using APG during inference. `5` and `38` are the official recommended values for 50 steps. If this value exceeds `--infer_steps`, APG will not be applied.
+- `--guidance_rescale`: Rescales the guidance for steps before APG starts. Default is `0.0` (no rescaling). If you use this option, a value around `0.5` might be good starting point.
+- `--guidance_rescale_apg`: Rescales the guidance for APG. Default is `0.0` (no rescaling). This option doesn't seem to have a large effect, but if you use it, a value around `0.5` might be a good starting point.
+
+`--split_attn` is not supported (since inference is done one at a time). `--fp8_vl` is not supported, please use CPU for the text encoder if VRAM is insufficient.
 
 <details>
 <summary>日本語</summary>
@@ -456,6 +476,13 @@ python hunyuan_image_minimal_inference.py \
 - `--image_size`: 解像度（2048x2048で最も安定）
 - `--guidance_scale`: CFGスケール（推奨: 3.5）
 - `--flow_shift`: Flow Matchingシフトパラメータ（デフォルト: 5.0）
+- `--text_encoder_cpu`: テキストエンコーダをCPUで実行してVRAM使用量削減
+- `--vae_chunk_size`: VAEデコーディングのチャンクサイズ（デフォルト: None、チャンク処理なし）。有効にする場合は16を推奨。
+- `--apg_start_step_general` と `--apg_start_step_ocr`: 推論中にAPGを使用する場合の開始ステップ。50ステップの場合、公式推奨値はそれぞれ5と38です。この値が`--infer_steps`を超えると、APGは適用されません。
+- `--guidance_rescale`: APG開始前のステップに対するガイダンスのリスケーリング。デフォルトは0.0（リスケーリングなし）。使用する場合、0.5程度から始めて調整してください。
+- `--guidance_rescale_apg`: APGに対するガイダンスのリスケーリング。デフォルトは0.0（リスケーリングなし）。このオプションは大きな効果はないようですが、使用する場合は0.5程度から始めて調整してください。
+
+`--split_attn`はサポートされていません（1件ずつ推論するため）。`--fp8_vl`もサポートされていません。VRAMが不足する場合はテキストエンコーダをCPUで実行してください。
 
 </details>
 
