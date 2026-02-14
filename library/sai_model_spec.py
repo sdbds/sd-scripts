@@ -81,6 +81,8 @@ ARCH_LUMINA_2 = "lumina-2"
 ARCH_LUMINA_UNKNOWN = "lumina"
 ARCH_HUNYUAN_IMAGE_2_1 = "hunyuan-image-2.1"
 ARCH_HUNYUAN_IMAGE_UNKNOWN = "hunyuan-image"
+ARCH_ANIMA_PREVIEW = "anima-preview"
+ARCH_ANIMA_UNKNOWN = "anima-unknown"
 
 ARCH_HYDIT_V1_1 = "hunyuan-dit-g2-v1_1"
 ARCH_HYDIT_V1_2 = "hunyuan-dit-g2-v1_2"
@@ -98,6 +100,7 @@ IMPL_FLUX = "https://github.com/black-forest-labs/flux"
 IMPL_CHROMA = "https://huggingface.co/lodestones/Chroma"
 IMPL_LUMINA = "https://github.com/Alpha-VLLM/Lumina-Image-2.0"
 IMPL_HUNYUAN_IMAGE = "https://github.com/Tencent-Hunyuan/HunyuanImage-2.1"
+IMPL_ANIMA = "https://huggingface.co/circlestone-labs/Anima"
 
 PRED_TYPE_EPSILON = "epsilon"
 PRED_TYPE_V = "v"
@@ -226,6 +229,12 @@ def determine_architecture(
             arch = ARCH_HUNYUAN_IMAGE_2_1
         else:
             arch = ARCH_HUNYUAN_IMAGE_UNKNOWN
+    elif "anima" in model_config:
+        anima_type = model_config["anima"]
+        if anima_type == "preview":
+            arch = ARCH_ANIMA_PREVIEW
+        else:
+            arch = ARCH_ANIMA_UNKNOWN
     elif v2:
         arch = ARCH_SD_V2_768_V if v_parameterization else ARCH_SD_V2_512
     else:
@@ -258,6 +267,8 @@ def determine_implementation(
             return IMPL_FLUX
     elif "lumina" in model_config:
         return IMPL_LUMINA
+    elif "anima" in model_config:
+        return IMPL_ANIMA
     elif (lora and sdxl) or textual_inversion or is_stable_diffusion_ckpt:
         return IMPL_STABILITY_AI
     else:
@@ -331,7 +342,7 @@ def determine_resolution(
             reso = (reso[0], reso[0])
     else:
         # Determine default resolution based on model type
-        if sdxl or "sd3" in model_config or "flux" in model_config or "lumina" in model_config:
+        if sdxl or "sd3" in model_config or "flux" in model_config or "lumina" in model_config or "anima" in model_config:
             reso = (1024, 1024)
         elif v2 and v_parameterization:
             reso = (768, 768)
