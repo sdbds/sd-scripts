@@ -7,23 +7,23 @@
 <summary>Click to expand</summary>
 
 - [Introduction](#introduction)
-  - [Supported Models](#supported-models)
-  - [Features](#features)
-  - [Sponsors](#sponsors)
-  - [Support the Project](#support-the-project)
+    - [Supported Models](#supported-models)
+    - [Features](#features)
+    - [Sponsors](#sponsors)
+    - [Support the Project](#support-the-project)
 - [Documentation](#documentation)
-  - [Training Documentation (English and Japanese)](#training-documentation-english-and-japanese)
-  - [Other Documentation (English and Japanese)](#other-documentation-english-and-japanese)
+    - [Training Documentation (English and Japanese)](#training-documentation-english-and-japanese)
+    - [Other Documentation (English and Japanese)](#other-documentation-english-and-japanese)
 - [For Developers Using AI Coding Agents](#for-developers-using-ai-coding-agents)
 - [Windows Installation](#windows-installation)
-  - [Windows Required Dependencies](#windows-required-dependencies)
-  - [Installation Steps](#installation-steps)
-  - [About requirements.txt and PyTorch](#about-requirementstxt-and-pytorch)
-  - [xformers installation (optional)](#xformers-installation-optional)
+    - [Windows Required Dependencies](#windows-required-dependencies)
+    - [Installation Steps](#installation-steps)
+    - [About requirements.txt and PyTorch](#about-requirementstxt-and-pytorch)
+    - [xformers installation (optional)](#xformers-installation-optional)
 - [Linux/WSL2 Installation](#linuxwsl2-installation)
-  - [DeepSpeed installation (experimental, Linux or WSL2 only)](#deepspeed-installation-experimental-linux-or-wsl2-only)
+    - [DeepSpeed installation (experimental, Linux or WSL2 only)](#deepspeed-installation-experimental-linux-or-wsl2-only)
 - [Upgrade](#upgrade)
-  - [Upgrade PyTorch](#upgrade-pytorch)
+    - [Upgrade PyTorch](#upgrade-pytorch)
 - [Credits](#credits)
 - [License](#license)
 
@@ -46,6 +46,25 @@ We are grateful to the following companies for their generous sponsorship:
 If you find this project helpful, please consider supporting its development via [GitHub Sponsors](https://github.com/sponsors/kohya-ss/). Your support is greatly appreciated!
 
 ### Change History
+
+- The following are the main changes planned for the next release. Please note that these changes may be subject to change without notice before the release.
+    - Improved compatibility with Intel GPUs. Thanks to WhitePr for [PR #2307](https://github.com/kohya-ss/sd-scripts/pull/2307).
+
+- **Version 0.10.3 (2026-04-02):**
+    - Stability when training with fp16 on Anima has been further improved. See [PR #2302](https://github.com/kohya-ss/sd-scripts/pull/2302) for details. We deeply appreciate those who reported the issue.
+
+- **Version 0.10.2 (2026-03-30):**
+    - LECO training for SD/SDXL is now supported. Many thanks to umisetokikaze for [PR #2285](https://github.com/kohya-ss/sd-scripts/pull/2285) and [PR #2294](https://github.com/kohya-ss/sd-scripts/pull/2294).
+        - Please refer to the [documentation](./docs/train_leco.md) for details.
+    - `networks/resize_lora.py` has been updated to use `torch.svd_lowrank`, resulting in a significant speedup. Many thanks to woct0rdho for [PR #2240](https://github.com/kohya-ss/sd-scripts/pull/2240) and [PR #2296](https://github.com/kohya-ss/sd-scripts/pull/2296).
+        - It is enabled by default. You can specify the number of iterations with the `--svd_lowrank_niter` option (default is 2, more iterations will improve accuracy). Setting it to 0 will revert to the previous method. Please check `--help` for details.
+    - LoKr/LoHa is now supported for SDXL/Anima. See [PR #2275](https://github.com/kohya-ss/sd-scripts/pull/2275) for details.
+        - Please refer to the [documentation](./docs/loha_lokr.md) for details.
+    - Multi-resolution datasets (using the same image resized to multiple bucket sizes) are now supported in SD/SDXL training. We also addressed the issue of duplicate images with the same resolution being used in multi-resolution datasets. See [PR #2269](https://github.com/kohya-ss/sd-scripts/pull/2269) and [PR #2273](https://github.com/kohya-ss/sd-scripts/pull/2273) for details.
+        - Thanks to woct0rdho for the contribution.
+        - Please refer to the [English documentation](./docs/config_README-en.md#behavior-when-there-are-duplicate-subsets) / [Japanese documentation](./docs/config_README-ja.md#重複したサブセットが存在する時の挙動) for details.
+    - Stability when training with fp16 on Anima has been improved. See [PR #2297](https://github.com/kohya-ss/sd-scripts/pull/2297) for details. However, it still seems to be unstable in some cases. If you encounter any issues, please let us know the details via Issues.
+    - Other minor bug fixes and improvements were made.
 
 - **Version 0.10.1 (2026-02-13):**
     - [Anima Preview](https://huggingface.co/circlestone-labs/Anima) model LoRA training and fine-tuning are now supported. See [PR #2260](https://github.com/kohya-ss/sd-scripts/pull/2260) and [PR #2261](https://github.com/kohya-ss/sd-scripts/pull/2261).
